@@ -4,6 +4,7 @@ using Aqua
 using JET
 
 @testset "FastCellularAutomata.jl" begin
+    include("test_lattice1d.jl")
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(FastCellularAutomata)
     end
@@ -31,4 +32,5 @@ using JET
             end
         end
     end
+    include("test_lattice1d.jl")
 end
