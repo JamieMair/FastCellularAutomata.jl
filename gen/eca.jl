@@ -129,6 +129,11 @@ function write_rules_file(filename::String, body_exprs::Vector{Any})
         println(io, "#   l = shift_left(x)  — left neighbours  (cell i-1 for each cell i)")
         println(io, "#   c = x              — centre cells")
         println(io, "#   r = shift_right(x) — right neighbours (cell i+1 for each cell i)")
+        println(io, "#")
+        println(io, "# _apply_rule(rule, l, c, r) applies the formula with no masking.")
+        println(io, "# needs_left/center/right(rule) return Bool constants used by the generic apply.")
+        println(io, "# apply(rule, x) is the scalar entry point; _apply_rule is usable directly")
+        println(io, "# for Vector/GPU use cases where l/c/r come from adjacent chunks.")
         println(io)
 
         # Rule type: dispatch on rule number R and bit count N
@@ -146,22 +151,42 @@ function write_rules_file(filename::String, body_exprs::Vector{Any})
         println(io, "end")
         println(io)
 
-        # One apply method per rule
+        # Single generic apply — uses Bool-returning trait functions so the compiler
+        # constant-propagates and eliminates unused branches at specialisation time.
+        # Val(N) is used only where N must be passed as a value to shift functions.
+        # Masking is skipped when N covers all bits of T (N == 8*sizeof(T)).
+        println(io, "@inline function apply(rule::ECARule{R, N}, x::T) where {R, N, T}")
+        println(io, "    l = needs_left(rule)   ? shift_left(x, Val(N))  : zero(T)")
+        println(io, "    c = needs_center(rule) ? x                      : zero(T)")
+        println(io, "    r = needs_right(rule)  ? shift_right(x, Val(N)) : zero(T)")
+        println(io, "    result = _apply_rule(rule, l, c, r)")
+        println(io, "    return N != 8 * sizeof(T) ? result & ~(~zero(T) << N) : result")
+        println(io, "end")
+        println(io)
+
+        # Per-rule: trait functions + formula
         for (i, body_expr) in enumerate(body_exprs)
             rule = i - 1
             code = expr_to_string(body_expr)
             needs_l = uses_input(body_expr, :l)
             needs_c = uses_input(body_expr, :c)
             needs_r = uses_input(body_expr, :r)
+            needs_m = uses_input(body_expr, :m)
 
             println(io, "# Rule $(rule): $(code)")
-            println(io, "@inline function apply(::ECARule{$(rule), N}, x::T) where {N, T}")
-            println(io, "    m = ~(~zero(T) << N)")
-            needs_l && println(io, "    l = shift_left(x, Val(N))")
-            needs_c && println(io, "    c = x")
-            needs_r && println(io, "    r = shift_right(x, Val(N))")
-            println(io, "    return m & ($(code))")
-            println(io, "end")
+            println(io, "@inline needs_left(::ECARule{$(rule)})   = $(needs_l)")
+            println(io, "@inline needs_center(::ECARule{$(rule)}) = $(needs_c)")
+            println(io, "@inline needs_right(::ECARule{$(rule)})  = $(needs_r)")
+            println(io)
+
+            if needs_m
+                println(io, "@inline function _apply_rule(::ECARule{$(rule), N}, l::T, c::T, r::T) where {N, T}")
+                println(io, "    m = ~(~zero(T) << N)")
+                println(io, "    return $(code)")
+                println(io, "end")
+            else
+                println(io, "@inline _apply_rule(::ECARule{$(rule), N}, l::T, c::T, r::T) where {N, T} = $(code)")
+            end
             println(io)
         end
 

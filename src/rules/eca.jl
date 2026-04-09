@@ -6,6 +6,11 @@
 #   l = shift_left(x)  — left neighbours  (cell i-1 for each cell i)
 #   c = x              — centre cells
 #   r = shift_right(x) — right neighbours (cell i+1 for each cell i)
+#
+# _apply_rule(rule, l, c, r) applies the formula with no masking.
+# needs_left/center/right(rule) return Bool constants used by the generic apply.
+# apply(rule, x) is the scalar entry point; _apply_rule is usable directly
+# for Vector/GPU use cases where l/c/r come from adjacent chunks.
 
 struct ECARule{R, N} end
 ECARule(rule::Int, nbits::Int) = ECARule{rule, nbits}()
@@ -18,2259 +23,1806 @@ end
     (x >> 1) | ((x & one(T)) << (N - 1))
 end
 
-# Rule 0: zero(T)
-@inline function apply(::ECARule{0, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    return m & (zero(T))
+@inline function apply(rule::ECARule{R, N}, x::T) where {R, N, T}
+    l = needs_left(rule)   ? shift_left(x, Val(N))  : zero(T)
+    c = needs_center(rule) ? x                      : zero(T)
+    r = needs_right(rule)  ? shift_right(x, Val(N)) : zero(T)
+    result = _apply_rule(rule, l, c, r)
+    return N != 8 * sizeof(T) ? result & ~(~zero(T) << N) : result
 end
+
+# Rule 0: zero(T)
+@inline needs_left(::ECARule{0})   = false
+@inline needs_center(::ECARule{0}) = false
+@inline needs_right(::ECARule{0})  = false
+
+@inline _apply_rule(::ECARule{0, N}, l::T, c::T, r::T) where {N, T} = zero(T)
 
 # Rule 1: ~((r | (c | l)))
-@inline function apply(::ECARule{1, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((r | (c | l))))
-end
+@inline needs_left(::ECARule{1})   = true
+@inline needs_center(::ECARule{1}) = true
+@inline needs_right(::ECARule{1})  = true
+
+@inline _apply_rule(::ECARule{1, N}, l::T, c::T, r::T) where {N, T} = ~((r | (c | l)))
 
 # Rule 2: (~((c | l)) & r)
-@inline function apply(::ECARule{2, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) & r))
-end
+@inline needs_left(::ECARule{2})   = true
+@inline needs_center(::ECARule{2}) = true
+@inline needs_right(::ECARule{2})  = true
+
+@inline _apply_rule(::ECARule{2, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) & r)
 
 # Rule 3: ~((c | l))
-@inline function apply(::ECARule{3, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & (~((c | l)))
-end
+@inline needs_left(::ECARule{3})   = true
+@inline needs_center(::ECARule{3}) = true
+@inline needs_right(::ECARule{3})  = false
+
+@inline _apply_rule(::ECARule{3, N}, l::T, c::T, r::T) where {N, T} = ~((c | l))
 
 # Rule 4: (~((r | l)) & c)
-@inline function apply(::ECARule{4, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | l)) & c))
-end
+@inline needs_left(::ECARule{4})   = true
+@inline needs_center(::ECARule{4}) = true
+@inline needs_right(::ECARule{4})  = true
+
+@inline _apply_rule(::ECARule{4, N}, l::T, c::T, r::T) where {N, T} = (~((r | l)) & c)
 
 # Rule 5: ~((r | l))
-@inline function apply(::ECARule{5, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & (~((r | l)))
-end
+@inline needs_left(::ECARule{5})   = true
+@inline needs_center(::ECARule{5}) = false
+@inline needs_right(::ECARule{5})  = true
+
+@inline _apply_rule(::ECARule{5, N}, l::T, c::T, r::T) where {N, T} = ~((r | l))
 
 # Rule 6: (~(l) & xor(r, c))
-@inline function apply(::ECARule{6, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) & xor(r, c)))
-end
+@inline needs_left(::ECARule{6})   = true
+@inline needs_center(::ECARule{6}) = true
+@inline needs_right(::ECARule{6})  = true
+
+@inline _apply_rule(::ECARule{6, N}, l::T, c::T, r::T) where {N, T} = (~(l) & xor(r, c))
 
 # Rule 7: ~(((r & c) | l))
-@inline function apply(::ECARule{7, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~(((r & c) | l)))
-end
+@inline needs_left(::ECARule{7})   = true
+@inline needs_center(::ECARule{7}) = true
+@inline needs_right(::ECARule{7})  = true
+
+@inline _apply_rule(::ECARule{7, N}, l::T, c::T, r::T) where {N, T} = ~(((r & c) | l))
 
 # Rule 8: ((~(l) & r) & c)
-@inline function apply(::ECARule{8, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & r) & c))
-end
+@inline needs_left(::ECARule{8})   = true
+@inline needs_center(::ECARule{8}) = true
+@inline needs_right(::ECARule{8})  = true
+
+@inline _apply_rule(::ECARule{8, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & r) & c)
 
 # Rule 9: ~((xor(r, c) | l))
-@inline function apply(::ECARule{9, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(r, c) | l)))
-end
+@inline needs_left(::ECARule{9})   = true
+@inline needs_center(::ECARule{9}) = true
+@inline needs_right(::ECARule{9})  = true
+
+@inline _apply_rule(::ECARule{9, N}, l::T, c::T, r::T) where {N, T} = ~((xor(r, c) | l))
 
 # Rule 10: (~(l) & r)
-@inline function apply(::ECARule{10, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((~(l) & r))
-end
+@inline needs_left(::ECARule{10})   = true
+@inline needs_center(::ECARule{10}) = false
+@inline needs_right(::ECARule{10})  = true
+
+@inline _apply_rule(::ECARule{10, N}, l::T, c::T, r::T) where {N, T} = (~(l) & r)
 
 # Rule 11: (~(l) & (~(c) | r))
-@inline function apply(::ECARule{11, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) & (~(c) | r)))
-end
+@inline needs_left(::ECARule{11})   = true
+@inline needs_center(::ECARule{11}) = true
+@inline needs_right(::ECARule{11})  = true
+
+@inline _apply_rule(::ECARule{11, N}, l::T, c::T, r::T) where {N, T} = (~(l) & (~(c) | r))
 
 # Rule 12: (~(l) & c)
-@inline function apply(::ECARule{12, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((~(l) & c))
-end
+@inline needs_left(::ECARule{12})   = true
+@inline needs_center(::ECARule{12}) = true
+@inline needs_right(::ECARule{12})  = false
+
+@inline _apply_rule(::ECARule{12, N}, l::T, c::T, r::T) where {N, T} = (~(l) & c)
 
 # Rule 13: (~(l) & (~(r) | c))
-@inline function apply(::ECARule{13, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) & (~(r) | c)))
-end
+@inline needs_left(::ECARule{13})   = true
+@inline needs_center(::ECARule{13}) = true
+@inline needs_right(::ECARule{13})  = true
+
+@inline _apply_rule(::ECARule{13, N}, l::T, c::T, r::T) where {N, T} = (~(l) & (~(r) | c))
 
 # Rule 14: (~(l) & (r | c))
-@inline function apply(::ECARule{14, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) & (r | c)))
-end
+@inline needs_left(::ECARule{14})   = true
+@inline needs_center(::ECARule{14}) = true
+@inline needs_right(::ECARule{14})  = true
+
+@inline _apply_rule(::ECARule{14, N}, l::T, c::T, r::T) where {N, T} = (~(l) & (r | c))
 
 # Rule 15: ~(l)
-@inline function apply(::ECARule{15, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    return m & (~(l))
-end
+@inline needs_left(::ECARule{15})   = true
+@inline needs_center(::ECARule{15}) = false
+@inline needs_right(::ECARule{15})  = false
+
+@inline _apply_rule(::ECARule{15, N}, l::T, c::T, r::T) where {N, T} = ~(l)
 
 # Rule 16: (~((r | c)) & l)
-@inline function apply(::ECARule{16, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | c)) & l))
-end
+@inline needs_left(::ECARule{16})   = true
+@inline needs_center(::ECARule{16}) = true
+@inline needs_right(::ECARule{16})  = true
+
+@inline _apply_rule(::ECARule{16, N}, l::T, c::T, r::T) where {N, T} = (~((r | c)) & l)
 
 # Rule 17: ~((r | c))
-@inline function apply(::ECARule{17, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((r | c)))
-end
+@inline needs_left(::ECARule{17})   = false
+@inline needs_center(::ECARule{17}) = true
+@inline needs_right(::ECARule{17})  = true
+
+@inline _apply_rule(::ECARule{17, N}, l::T, c::T, r::T) where {N, T} = ~((r | c))
 
 # Rule 18: (~(c) & xor(r, l))
-@inline function apply(::ECARule{18, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) & xor(r, l)))
-end
+@inline needs_left(::ECARule{18})   = true
+@inline needs_center(::ECARule{18}) = true
+@inline needs_right(::ECARule{18})  = true
+
+@inline _apply_rule(::ECARule{18, N}, l::T, c::T, r::T) where {N, T} = (~(c) & xor(r, l))
 
 # Rule 19: ~(((r & l) | c))
-@inline function apply(::ECARule{19, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~(((r & l) | c)))
-end
+@inline needs_left(::ECARule{19})   = true
+@inline needs_center(::ECARule{19}) = true
+@inline needs_right(::ECARule{19})  = true
+
+@inline _apply_rule(::ECARule{19, N}, l::T, c::T, r::T) where {N, T} = ~(((r & l) | c))
 
 # Rule 20: (xor(c, l) & ~(r))
-@inline function apply(::ECARule{20, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & ~(r)))
-end
+@inline needs_left(::ECARule{20})   = true
+@inline needs_center(::ECARule{20}) = true
+@inline needs_right(::ECARule{20})  = true
+
+@inline _apply_rule(::ECARule{20, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & ~(r))
 
 # Rule 21: ~((r | (c & l)))
-@inline function apply(::ECARule{21, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((r | (c & l))))
-end
+@inline needs_left(::ECARule{21})   = true
+@inline needs_center(::ECARule{21}) = true
+@inline needs_right(::ECARule{21})  = true
+
+@inline _apply_rule(::ECARule{21, N}, l::T, c::T, r::T) where {N, T} = ~((r | (c & l)))
 
 # Rule 22: xor(r, (xor(c, l) | (r & c)))
-@inline function apply(::ECARule{22, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, (xor(c, l) | (r & c))))
-end
+@inline needs_left(::ECARule{22})   = true
+@inline needs_center(::ECARule{22}) = true
+@inline needs_right(::ECARule{22})  = true
+
+@inline _apply_rule(::ECARule{22, N}, l::T, c::T, r::T) where {N, T} = xor(r, (xor(c, l) | (r & c)))
 
 # Rule 23: xor((xor(c, l) & xor(r, c)), ~(c))
-@inline function apply(::ECARule{23, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & xor(r, c)), ~(c)))
-end
+@inline needs_left(::ECARule{23})   = true
+@inline needs_center(::ECARule{23}) = true
+@inline needs_right(::ECARule{23})  = true
+
+@inline _apply_rule(::ECARule{23, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & xor(r, c)), ~(c))
 
 # Rule 24: (xor(c, l) & xor(~(c), r))
-@inline function apply(::ECARule{24, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & xor(~(c), r)))
-end
+@inline needs_left(::ECARule{24})   = true
+@inline needs_center(::ECARule{24}) = true
+@inline needs_right(::ECARule{24})  = true
+
+@inline _apply_rule(::ECARule{24, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & xor(~(c), r))
 
 # Rule 25: xor(c, (~(r) | (c & l)))
-@inline function apply(::ECARule{25, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (~(r) | (c & l))))
-end
+@inline needs_left(::ECARule{25})   = true
+@inline needs_center(::ECARule{25}) = true
+@inline needs_right(::ECARule{25})  = true
+
+@inline _apply_rule(::ECARule{25, N}, l::T, c::T, r::T) where {N, T} = xor(c, (~(r) | (c & l)))
 
 # Rule 26: xor((r | (c & l)), l)
-@inline function apply(::ECARule{26, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r | (c & l)), l))
-end
+@inline needs_left(::ECARule{26})   = true
+@inline needs_center(::ECARule{26}) = true
+@inline needs_right(::ECARule{26})  = true
+
+@inline _apply_rule(::ECARule{26, N}, l::T, c::T, r::T) where {N, T} = xor((r | (c & l)), l)
 
 # Rule 27: xor((xor(c, l) & r), ~(c))
-@inline function apply(::ECARule{27, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & r), ~(c)))
-end
+@inline needs_left(::ECARule{27})   = true
+@inline needs_center(::ECARule{27}) = true
+@inline needs_right(::ECARule{27})  = true
+
+@inline _apply_rule(::ECARule{27, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & r), ~(c))
 
 # Rule 28: (xor(c, l) & (~(r) | c))
-@inline function apply(::ECARule{28, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & (~(r) | c)))
-end
+@inline needs_left(::ECARule{28})   = true
+@inline needs_center(::ECARule{28}) = true
+@inline needs_right(::ECARule{28})  = true
+
+@inline _apply_rule(::ECARule{28, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & (~(r) | c))
 
 # Rule 29: xor((c & l), (~(r) | c))
-@inline function apply(::ECARule{29, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((c & l), (~(r) | c)))
-end
+@inline needs_left(::ECARule{29})   = true
+@inline needs_center(::ECARule{29}) = true
+@inline needs_right(::ECARule{29})  = true
+
+@inline _apply_rule(::ECARule{29, N}, l::T, c::T, r::T) where {N, T} = xor((c & l), (~(r) | c))
 
 # Rule 30: xor((r | c), l)
-@inline function apply(::ECARule{30, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r | c), l))
-end
+@inline needs_left(::ECARule{30})   = true
+@inline needs_center(::ECARule{30}) = true
+@inline needs_right(::ECARule{30})  = true
+
+@inline _apply_rule(::ECARule{30, N}, l::T, c::T, r::T) where {N, T} = xor((r | c), l)
 
 # Rule 31: ~(((r | c) & l))
-@inline function apply(::ECARule{31, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~(((r | c) & l)))
-end
+@inline needs_left(::ECARule{31})   = true
+@inline needs_center(::ECARule{31}) = true
+@inline needs_right(::ECARule{31})  = true
+
+@inline _apply_rule(::ECARule{31, N}, l::T, c::T, r::T) where {N, T} = ~(((r | c) & l))
 
 # Rule 32: ((~(c) & r) & l)
-@inline function apply(::ECARule{32, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & r) & l))
-end
+@inline needs_left(::ECARule{32})   = true
+@inline needs_center(::ECARule{32}) = true
+@inline needs_right(::ECARule{32})  = true
+
+@inline _apply_rule(::ECARule{32, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & r) & l)
 
 # Rule 33: ~((xor(r, l) | c))
-@inline function apply(::ECARule{33, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(r, l) | c)))
-end
+@inline needs_left(::ECARule{33})   = true
+@inline needs_center(::ECARule{33}) = true
+@inline needs_right(::ECARule{33})  = true
+
+@inline _apply_rule(::ECARule{33, N}, l::T, c::T, r::T) where {N, T} = ~((xor(r, l) | c))
 
 # Rule 34: (~(c) & r)
-@inline function apply(::ECARule{34, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) & r))
-end
+@inline needs_left(::ECARule{34})   = false
+@inline needs_center(::ECARule{34}) = true
+@inline needs_right(::ECARule{34})  = true
+
+@inline _apply_rule(::ECARule{34, N}, l::T, c::T, r::T) where {N, T} = (~(c) & r)
 
 # Rule 35: (~(c) & (~(l) | r))
-@inline function apply(::ECARule{35, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) & (~(l) | r)))
-end
+@inline needs_left(::ECARule{35})   = true
+@inline needs_center(::ECARule{35}) = true
+@inline needs_right(::ECARule{35})  = true
+
+@inline _apply_rule(::ECARule{35, N}, l::T, c::T, r::T) where {N, T} = (~(c) & (~(l) | r))
 
 # Rule 36: (xor(c, l) & xor(r, c))
-@inline function apply(::ECARule{36, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & xor(r, c)))
-end
+@inline needs_left(::ECARule{36})   = true
+@inline needs_center(::ECARule{36}) = true
+@inline needs_right(::ECARule{36})  = true
+
+@inline _apply_rule(::ECARule{36, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & xor(r, c))
 
 # Rule 37: xor((~(l) | (r & c)), r)
-@inline function apply(::ECARule{37, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) | (r & c)), r))
-end
+@inline needs_left(::ECARule{37})   = true
+@inline needs_center(::ECARule{37}) = true
+@inline needs_right(::ECARule{37})  = true
+
+@inline _apply_rule(::ECARule{37, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) | (r & c)), r)
 
 # Rule 38: xor(c, (r | (c & l)))
-@inline function apply(::ECARule{38, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (r | (c & l))))
-end
+@inline needs_left(::ECARule{38})   = true
+@inline needs_center(::ECARule{38}) = true
+@inline needs_right(::ECARule{38})  = true
+
+@inline _apply_rule(::ECARule{38, N}, l::T, c::T, r::T) where {N, T} = xor(c, (r | (c & l)))
 
 # Rule 39: xor(c, (r | xor(~(l), c)))
-@inline function apply(::ECARule{39, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (r | xor(~(l), c))))
-end
+@inline needs_left(::ECARule{39})   = true
+@inline needs_center(::ECARule{39}) = true
+@inline needs_right(::ECARule{39})  = true
+
+@inline _apply_rule(::ECARule{39, N}, l::T, c::T, r::T) where {N, T} = xor(c, (r | xor(~(l), c)))
 
 # Rule 40: (xor(c, l) & r)
-@inline function apply(::ECARule{40, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & r))
-end
+@inline needs_left(::ECARule{40})   = true
+@inline needs_center(::ECARule{40}) = true
+@inline needs_right(::ECARule{40})  = true
+
+@inline _apply_rule(::ECARule{40, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & r)
 
 # Rule 41: xor(~(l), xor(c, (r | (c & l))))
-@inline function apply(::ECARule{41, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), xor(c, (r | (c & l)))))
-end
+@inline needs_left(::ECARule{41})   = true
+@inline needs_center(::ECARule{41}) = true
+@inline needs_right(::ECARule{41})  = true
+
+@inline _apply_rule(::ECARule{41, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), xor(c, (r | (c & l))))
 
 # Rule 42: (~((c & l)) & r)
-@inline function apply(::ECARule{42, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c & l)) & r))
-end
+@inline needs_left(::ECARule{42})   = true
+@inline needs_center(::ECARule{42}) = true
+@inline needs_right(::ECARule{42})  = true
+
+@inline _apply_rule(::ECARule{42, N}, l::T, c::T, r::T) where {N, T} = (~((c & l)) & r)
 
 # Rule 43: xor(c, (xor(r, c) | xor(~(l), c)))
-@inline function apply(::ECARule{43, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (xor(r, c) | xor(~(l), c))))
-end
+@inline needs_left(::ECARule{43})   = true
+@inline needs_center(::ECARule{43}) = true
+@inline needs_right(::ECARule{43})  = true
+
+@inline _apply_rule(::ECARule{43, N}, l::T, c::T, r::T) where {N, T} = xor(c, (xor(r, c) | xor(~(l), c)))
 
 # Rule 44: (xor(c, l) & (r | c))
-@inline function apply(::ECARule{44, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & (r | c)))
-end
+@inline needs_left(::ECARule{44})   = true
+@inline needs_center(::ECARule{44}) = true
+@inline needs_right(::ECARule{44})  = true
+
+@inline _apply_rule(::ECARule{44, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & (r | c))
 
 # Rule 45: xor((~(r) | c), l)
-@inline function apply(::ECARule{45, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(r) | c), l))
-end
+@inline needs_left(::ECARule{45})   = true
+@inline needs_center(::ECARule{45}) = true
+@inline needs_right(::ECARule{45})  = true
+
+@inline _apply_rule(::ECARule{45, N}, l::T, c::T, r::T) where {N, T} = xor((~(r) | c), l)
 
 # Rule 46: xor((c & l), (r | c))
-@inline function apply(::ECARule{46, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((c & l), (r | c)))
-end
+@inline needs_left(::ECARule{46})   = true
+@inline needs_center(::ECARule{46}) = true
+@inline needs_right(::ECARule{46})  = true
+
+@inline _apply_rule(::ECARule{46, N}, l::T, c::T, r::T) where {N, T} = xor((c & l), (r | c))
 
 # Rule 47: (~(l) | (~(c) & r))
-@inline function apply(::ECARule{47, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | (~(c) & r)))
-end
+@inline needs_left(::ECARule{47})   = true
+@inline needs_center(::ECARule{47}) = true
+@inline needs_right(::ECARule{47})  = true
+
+@inline _apply_rule(::ECARule{47, N}, l::T, c::T, r::T) where {N, T} = (~(l) | (~(c) & r))
 
 # Rule 48: (~(c) & l)
-@inline function apply(::ECARule{48, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((~(c) & l))
-end
+@inline needs_left(::ECARule{48})   = true
+@inline needs_center(::ECARule{48}) = true
+@inline needs_right(::ECARule{48})  = false
+
+@inline _apply_rule(::ECARule{48, N}, l::T, c::T, r::T) where {N, T} = (~(c) & l)
 
 # Rule 49: (~(c) & (~(r) | l))
-@inline function apply(::ECARule{49, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) & (~(r) | l)))
-end
+@inline needs_left(::ECARule{49})   = true
+@inline needs_center(::ECARule{49}) = true
+@inline needs_right(::ECARule{49})  = true
+
+@inline _apply_rule(::ECARule{49, N}, l::T, c::T, r::T) where {N, T} = (~(c) & (~(r) | l))
 
 # Rule 50: (~(c) & (r | l))
-@inline function apply(::ECARule{50, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) & (r | l)))
-end
+@inline needs_left(::ECARule{50})   = true
+@inline needs_center(::ECARule{50}) = true
+@inline needs_right(::ECARule{50})  = true
+
+@inline _apply_rule(::ECARule{50, N}, l::T, c::T, r::T) where {N, T} = (~(c) & (r | l))
 
 # Rule 51: ~(c)
-@inline function apply(::ECARule{51, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    return m & (~(c))
-end
+@inline needs_left(::ECARule{51})   = false
+@inline needs_center(::ECARule{51}) = true
+@inline needs_right(::ECARule{51})  = false
+
+@inline _apply_rule(::ECARule{51, N}, l::T, c::T, r::T) where {N, T} = ~(c)
 
 # Rule 52: xor(c, ((r & c) | l))
-@inline function apply(::ECARule{52, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, ((r & c) | l)))
-end
+@inline needs_left(::ECARule{52})   = true
+@inline needs_center(::ECARule{52}) = true
+@inline needs_right(::ECARule{52})  = true
+
+@inline _apply_rule(::ECARule{52, N}, l::T, c::T, r::T) where {N, T} = xor(c, ((r & c) | l))
 
 # Rule 53: xor(c, (xor(~(c), r) | l))
-@inline function apply(::ECARule{53, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (xor(~(c), r) | l)))
-end
+@inline needs_left(::ECARule{53})   = true
+@inline needs_center(::ECARule{53}) = true
+@inline needs_right(::ECARule{53})  = true
+
+@inline _apply_rule(::ECARule{53, N}, l::T, c::T, r::T) where {N, T} = xor(c, (xor(~(c), r) | l))
 
 # Rule 54: xor(c, (r | l))
-@inline function apply(::ECARule{54, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (r | l)))
-end
+@inline needs_left(::ECARule{54})   = true
+@inline needs_center(::ECARule{54}) = true
+@inline needs_right(::ECARule{54})  = true
+
+@inline _apply_rule(::ECARule{54, N}, l::T, c::T, r::T) where {N, T} = xor(c, (r | l))
 
 # Rule 55: ~((c & (r | l)))
-@inline function apply(::ECARule{55, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((c & (r | l))))
-end
+@inline needs_left(::ECARule{55})   = true
+@inline needs_center(::ECARule{55}) = true
+@inline needs_right(::ECARule{55})  = true
+
+@inline _apply_rule(::ECARule{55, N}, l::T, c::T, r::T) where {N, T} = ~((c & (r | l)))
 
 # Rule 56: (xor(c, l) & (~(c) | r))
-@inline function apply(::ECARule{56, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) & (~(c) | r)))
-end
+@inline needs_left(::ECARule{56})   = true
+@inline needs_center(::ECARule{56}) = true
+@inline needs_right(::ECARule{56})  = true
+
+@inline _apply_rule(::ECARule{56, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) & (~(c) | r))
 
 # Rule 57: xor(c, (~(r) | l))
-@inline function apply(::ECARule{57, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (~(r) | l)))
-end
+@inline needs_left(::ECARule{57})   = true
+@inline needs_center(::ECARule{57}) = true
+@inline needs_right(::ECARule{57})  = true
+
+@inline _apply_rule(::ECARule{57, N}, l::T, c::T, r::T) where {N, T} = xor(c, (~(r) | l))
 
 # Rule 58: xor(c, (xor(r, c) | l))
-@inline function apply(::ECARule{58, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(c, (xor(r, c) | l)))
-end
+@inline needs_left(::ECARule{58})   = true
+@inline needs_center(::ECARule{58}) = true
+@inline needs_right(::ECARule{58})  = true
+
+@inline _apply_rule(::ECARule{58, N}, l::T, c::T, r::T) where {N, T} = xor(c, (xor(r, c) | l))
 
 # Rule 59: ((~(l) & r) | ~(c))
-@inline function apply(::ECARule{59, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & r) | ~(c)))
-end
+@inline needs_left(::ECARule{59})   = true
+@inline needs_center(::ECARule{59}) = true
+@inline needs_right(::ECARule{59})  = true
+
+@inline _apply_rule(::ECARule{59, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & r) | ~(c))
 
 # Rule 60: xor(c, l)
-@inline function apply(::ECARule{60, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & (xor(c, l))
-end
+@inline needs_left(::ECARule{60})   = true
+@inline needs_center(::ECARule{60}) = true
+@inline needs_right(::ECARule{60})  = false
+
+@inline _apply_rule(::ECARule{60, N}, l::T, c::T, r::T) where {N, T} = xor(c, l)
 
 # Rule 61: (~((r | c)) | xor(c, l))
-@inline function apply(::ECARule{61, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | c)) | xor(c, l)))
-end
+@inline needs_left(::ECARule{61})   = true
+@inline needs_center(::ECARule{61}) = true
+@inline needs_right(::ECARule{61})  = true
+
+@inline _apply_rule(::ECARule{61, N}, l::T, c::T, r::T) where {N, T} = (~((r | c)) | xor(c, l))
 
 # Rule 62: ((~(c) & r) | xor(c, l))
-@inline function apply(::ECARule{62, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & r) | xor(c, l)))
-end
+@inline needs_left(::ECARule{62})   = true
+@inline needs_center(::ECARule{62}) = true
+@inline needs_right(::ECARule{62})  = true
+
+@inline _apply_rule(::ECARule{62, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & r) | xor(c, l))
 
 # Rule 63: ~((c & l))
-@inline function apply(::ECARule{63, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & (~((c & l)))
-end
+@inline needs_left(::ECARule{63})   = true
+@inline needs_center(::ECARule{63}) = true
+@inline needs_right(::ECARule{63})  = false
+
+@inline _apply_rule(::ECARule{63, N}, l::T, c::T, r::T) where {N, T} = ~((c & l))
 
 # Rule 64: ((~(r) & c) & l)
-@inline function apply(::ECARule{64, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(r) & c) & l))
-end
+@inline needs_left(::ECARule{64})   = true
+@inline needs_center(::ECARule{64}) = true
+@inline needs_right(::ECARule{64})  = true
+
+@inline _apply_rule(::ECARule{64, N}, l::T, c::T, r::T) where {N, T} = ((~(r) & c) & l)
 
 # Rule 65: ~((xor(c, l) | r))
-@inline function apply(::ECARule{65, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(c, l) | r)))
-end
+@inline needs_left(::ECARule{65})   = true
+@inline needs_center(::ECARule{65}) = true
+@inline needs_right(::ECARule{65})  = true
+
+@inline _apply_rule(::ECARule{65, N}, l::T, c::T, r::T) where {N, T} = ~((xor(c, l) | r))
 
 # Rule 66: (xor(r, c) & xor(~(l), c))
-@inline function apply(::ECARule{66, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) & xor(~(l), c)))
-end
+@inline needs_left(::ECARule{66})   = true
+@inline needs_center(::ECARule{66}) = true
+@inline needs_right(::ECARule{66})  = true
+
+@inline _apply_rule(::ECARule{66, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) & xor(~(l), c))
 
 # Rule 67: xor((~(l) | (r & c)), c)
-@inline function apply(::ECARule{67, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) | (r & c)), c))
-end
+@inline needs_left(::ECARule{67})   = true
+@inline needs_center(::ECARule{67}) = true
+@inline needs_right(::ECARule{67})  = true
+
+@inline _apply_rule(::ECARule{67, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) | (r & c)), c)
 
 # Rule 68: (~(r) & c)
-@inline function apply(::ECARule{68, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) & c))
-end
+@inline needs_left(::ECARule{68})   = false
+@inline needs_center(::ECARule{68}) = true
+@inline needs_right(::ECARule{68})  = true
+
+@inline _apply_rule(::ECARule{68, N}, l::T, c::T, r::T) where {N, T} = (~(r) & c)
 
 # Rule 69: (~(r) & (~(l) | c))
-@inline function apply(::ECARule{69, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) & (~(l) | c)))
-end
+@inline needs_left(::ECARule{69})   = true
+@inline needs_center(::ECARule{69}) = true
+@inline needs_right(::ECARule{69})  = true
+
+@inline _apply_rule(::ECARule{69, N}, l::T, c::T, r::T) where {N, T} = (~(r) & (~(l) | c))
 
 # Rule 70: (xor(r, c) & (~(l) | c))
-@inline function apply(::ECARule{70, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) & (~(l) | c)))
-end
+@inline needs_left(::ECARule{70})   = true
+@inline needs_center(::ECARule{70}) = true
+@inline needs_right(::ECARule{70})  = true
+
+@inline _apply_rule(::ECARule{70, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) & (~(l) | c))
 
 # Rule 71: xor((r & c), (~(l) | c))
-@inline function apply(::ECARule{71, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r & c), (~(l) | c)))
-end
+@inline needs_left(::ECARule{71})   = true
+@inline needs_center(::ECARule{71}) = true
+@inline needs_right(::ECARule{71})  = true
+
+@inline _apply_rule(::ECARule{71, N}, l::T, c::T, r::T) where {N, T} = xor((r & c), (~(l) | c))
 
 # Rule 72: (xor(r, l) & c)
-@inline function apply(::ECARule{72, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, l) & c))
-end
+@inline needs_left(::ECARule{72})   = true
+@inline needs_center(::ECARule{72}) = true
+@inline needs_right(::ECARule{72})  = true
+
+@inline _apply_rule(::ECARule{72, N}, l::T, c::T, r::T) where {N, T} = (xor(r, l) & c)
 
 # Rule 73: xor(~(l), (xor(r, c) & (~(l) | c)))
-@inline function apply(::ECARule{73, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (xor(r, c) & (~(l) | c))))
-end
+@inline needs_left(::ECARule{73})   = true
+@inline needs_center(::ECARule{73}) = true
+@inline needs_right(::ECARule{73})  = true
+
+@inline _apply_rule(::ECARule{73, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (xor(r, c) & (~(l) | c)))
 
 # Rule 74: (xor(r, l) & (r | c))
-@inline function apply(::ECARule{74, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, l) & (r | c)))
-end
+@inline needs_left(::ECARule{74})   = true
+@inline needs_center(::ECARule{74}) = true
+@inline needs_right(::ECARule{74})  = true
+
+@inline _apply_rule(::ECARule{74, N}, l::T, c::T, r::T) where {N, T} = (xor(r, l) & (r | c))
 
 # Rule 75: xor((~(c) | r), l)
-@inline function apply(::ECARule{75, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(c) | r), l))
-end
+@inline needs_left(::ECARule{75})   = true
+@inline needs_center(::ECARule{75}) = true
+@inline needs_right(::ECARule{75})  = true
+
+@inline _apply_rule(::ECARule{75, N}, l::T, c::T, r::T) where {N, T} = xor((~(c) | r), l)
 
 # Rule 76: (~((r & l)) & c)
-@inline function apply(::ECARule{76, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r & l)) & c))
-end
+@inline needs_left(::ECARule{76})   = true
+@inline needs_center(::ECARule{76}) = true
+@inline needs_right(::ECARule{76})  = true
+
+@inline _apply_rule(::ECARule{76, N}, l::T, c::T, r::T) where {N, T} = (~((r & l)) & c)
 
 # Rule 77: xor(~(c), (xor(c, l) | xor(r, c)))
-@inline function apply(::ECARule{77, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (xor(c, l) | xor(r, c))))
-end
+@inline needs_left(::ECARule{77})   = true
+@inline needs_center(::ECARule{77}) = true
+@inline needs_right(::ECARule{77})  = true
+
+@inline _apply_rule(::ECARule{77, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (xor(c, l) | xor(r, c)))
 
 # Rule 78: xor((r & xor(~(l), c)), c)
-@inline function apply(::ECARule{78, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r & xor(~(l), c)), c))
-end
+@inline needs_left(::ECARule{78})   = true
+@inline needs_center(::ECARule{78}) = true
+@inline needs_right(::ECARule{78})  = true
+
+@inline _apply_rule(::ECARule{78, N}, l::T, c::T, r::T) where {N, T} = xor((r & xor(~(l), c)), c)
 
 # Rule 79: (~(l) | (~(r) & c))
-@inline function apply(::ECARule{79, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | (~(r) & c)))
-end
+@inline needs_left(::ECARule{79})   = true
+@inline needs_center(::ECARule{79}) = true
+@inline needs_right(::ECARule{79})  = true
+
+@inline _apply_rule(::ECARule{79, N}, l::T, c::T, r::T) where {N, T} = (~(l) | (~(r) & c))
 
 # Rule 80: (~(r) & l)
-@inline function apply(::ECARule{80, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((~(r) & l))
-end
+@inline needs_left(::ECARule{80})   = true
+@inline needs_center(::ECARule{80}) = false
+@inline needs_right(::ECARule{80})  = true
+
+@inline _apply_rule(::ECARule{80, N}, l::T, c::T, r::T) where {N, T} = (~(r) & l)
 
 # Rule 81: (~(r) & (~(c) | l))
-@inline function apply(::ECARule{81, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) & (~(c) | l)))
-end
+@inline needs_left(::ECARule{81})   = true
+@inline needs_center(::ECARule{81}) = true
+@inline needs_right(::ECARule{81})  = true
+
+@inline _apply_rule(::ECARule{81, N}, l::T, c::T, r::T) where {N, T} = (~(r) & (~(c) | l))
 
 # Rule 82: xor(r, ((r & c) | l))
-@inline function apply(::ECARule{82, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, ((r & c) | l)))
-end
+@inline needs_left(::ECARule{82})   = true
+@inline needs_center(::ECARule{82}) = true
+@inline needs_right(::ECARule{82})  = true
+
+@inline _apply_rule(::ECARule{82, N}, l::T, c::T, r::T) where {N, T} = xor(r, ((r & c) | l))
 
 # Rule 83: xor(~(c), (xor(r, c) & l))
-@inline function apply(::ECARule{83, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (xor(r, c) & l)))
-end
+@inline needs_left(::ECARule{83})   = true
+@inline needs_center(::ECARule{83}) = true
+@inline needs_right(::ECARule{83})  = true
+
+@inline _apply_rule(::ECARule{83, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (xor(r, c) & l))
 
 # Rule 84: (~(r) & (c | l))
-@inline function apply(::ECARule{84, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) & (c | l)))
-end
+@inline needs_left(::ECARule{84})   = true
+@inline needs_center(::ECARule{84}) = true
+@inline needs_right(::ECARule{84})  = true
+
+@inline _apply_rule(::ECARule{84, N}, l::T, c::T, r::T) where {N, T} = (~(r) & (c | l))
 
 # Rule 85: ~(r)
-@inline function apply(::ECARule{85, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    r = shift_right(x, Val(N))
-    return m & (~(r))
-end
+@inline needs_left(::ECARule{85})   = false
+@inline needs_center(::ECARule{85}) = false
+@inline needs_right(::ECARule{85})  = true
+
+@inline _apply_rule(::ECARule{85, N}, l::T, c::T, r::T) where {N, T} = ~(r)
 
 # Rule 86: xor(r, (c | l))
-@inline function apply(::ECARule{86, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, (c | l)))
-end
+@inline needs_left(::ECARule{86})   = true
+@inline needs_center(::ECARule{86}) = true
+@inline needs_right(::ECARule{86})  = true
+
+@inline _apply_rule(::ECARule{86, N}, l::T, c::T, r::T) where {N, T} = xor(r, (c | l))
 
 # Rule 87: ~((r & (c | l)))
-@inline function apply(::ECARule{87, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((r & (c | l))))
-end
+@inline needs_left(::ECARule{87})   = true
+@inline needs_center(::ECARule{87}) = true
+@inline needs_right(::ECARule{87})  = true
+
+@inline _apply_rule(::ECARule{87, N}, l::T, c::T, r::T) where {N, T} = ~((r & (c | l)))
 
 # Rule 88: (xor(r, l) & (c | l))
-@inline function apply(::ECARule{88, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, l) & (c | l)))
-end
+@inline needs_left(::ECARule{88})   = true
+@inline needs_center(::ECARule{88}) = true
+@inline needs_right(::ECARule{88})  = true
+
+@inline _apply_rule(::ECARule{88, N}, l::T, c::T, r::T) where {N, T} = (xor(r, l) & (c | l))
 
 # Rule 89: xor(r, (~(c) | l))
-@inline function apply(::ECARule{89, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, (~(c) | l)))
-end
+@inline needs_left(::ECARule{89})   = true
+@inline needs_center(::ECARule{89}) = true
+@inline needs_right(::ECARule{89})  = true
+
+@inline _apply_rule(::ECARule{89, N}, l::T, c::T, r::T) where {N, T} = xor(r, (~(c) | l))
 
 # Rule 90: xor(r, l)
-@inline function apply(::ECARule{90, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & (xor(r, l))
-end
+@inline needs_left(::ECARule{90})   = true
+@inline needs_center(::ECARule{90}) = false
+@inline needs_right(::ECARule{90})  = true
+
+@inline _apply_rule(::ECARule{90, N}, l::T, c::T, r::T) where {N, T} = xor(r, l)
 
 # Rule 91: (~((c | l)) | xor(r, l))
-@inline function apply(::ECARule{91, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) | xor(r, l)))
-end
+@inline needs_left(::ECARule{91})   = true
+@inline needs_center(::ECARule{91}) = true
+@inline needs_right(::ECARule{91})  = true
+
+@inline _apply_rule(::ECARule{91, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) | xor(r, l))
 
 # Rule 92: xor((xor(~(c), r) & l), c)
-@inline function apply(::ECARule{92, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(~(c), r) & l), c))
-end
+@inline needs_left(::ECARule{92})   = true
+@inline needs_center(::ECARule{92}) = true
+@inline needs_right(::ECARule{92})  = true
+
+@inline _apply_rule(::ECARule{92, N}, l::T, c::T, r::T) where {N, T} = xor((xor(~(c), r) & l), c)
 
 # Rule 93: ((~(l) & c) | ~(r))
-@inline function apply(::ECARule{93, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & c) | ~(r)))
-end
+@inline needs_left(::ECARule{93})   = true
+@inline needs_center(::ECARule{93}) = true
+@inline needs_right(::ECARule{93})  = true
+
+@inline _apply_rule(::ECARule{93, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & c) | ~(r))
 
 # Rule 94: ((~(l) & c) | xor(r, l))
-@inline function apply(::ECARule{94, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & c) | xor(r, l)))
-end
+@inline needs_left(::ECARule{94})   = true
+@inline needs_center(::ECARule{94}) = true
+@inline needs_right(::ECARule{94})  = true
+
+@inline _apply_rule(::ECARule{94, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & c) | xor(r, l))
 
 # Rule 95: ~((r & l))
-@inline function apply(::ECARule{95, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & (~((r & l)))
-end
+@inline needs_left(::ECARule{95})   = true
+@inline needs_center(::ECARule{95}) = false
+@inline needs_right(::ECARule{95})  = true
+
+@inline _apply_rule(::ECARule{95, N}, l::T, c::T, r::T) where {N, T} = ~((r & l))
 
 # Rule 96: (xor(r, c) & l)
-@inline function apply(::ECARule{96, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) & l))
-end
+@inline needs_left(::ECARule{96})   = true
+@inline needs_center(::ECARule{96}) = true
+@inline needs_right(::ECARule{96})  = true
+
+@inline _apply_rule(::ECARule{96, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) & l)
 
 # Rule 97: xor(~(((r & c) | l)), xor(r, c))
-@inline function apply(::ECARule{97, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(((r & c) | l)), xor(r, c)))
-end
+@inline needs_left(::ECARule{97})   = true
+@inline needs_center(::ECARule{97}) = true
+@inline needs_right(::ECARule{97})  = true
+
+@inline _apply_rule(::ECARule{97, N}, l::T, c::T, r::T) where {N, T} = xor(~(((r & c) | l)), xor(r, c))
 
 # Rule 98: (xor(r, c) & (~(c) | l))
-@inline function apply(::ECARule{98, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) & (~(c) | l)))
-end
+@inline needs_left(::ECARule{98})   = true
+@inline needs_center(::ECARule{98}) = true
+@inline needs_right(::ECARule{98})  = true
+
+@inline _apply_rule(::ECARule{98, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) & (~(c) | l))
 
 # Rule 99: xor((~(l) | r), c)
-@inline function apply(::ECARule{99, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) | r), c))
-end
+@inline needs_left(::ECARule{99})   = true
+@inline needs_center(::ECARule{99}) = true
+@inline needs_right(::ECARule{99})  = true
+
+@inline _apply_rule(::ECARule{99, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) | r), c)
 
 # Rule 100: (xor(r, c) & (c | l))
-@inline function apply(::ECARule{100, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) & (c | l)))
-end
+@inline needs_left(::ECARule{100})   = true
+@inline needs_center(::ECARule{100}) = true
+@inline needs_right(::ECARule{100})  = true
+
+@inline _apply_rule(::ECARule{100, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) & (c | l))
 
 # Rule 101: xor(r, (~(l) | c))
-@inline function apply(::ECARule{101, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, (~(l) | c)))
-end
+@inline needs_left(::ECARule{101})   = true
+@inline needs_center(::ECARule{101}) = true
+@inline needs_right(::ECARule{101})  = true
+
+@inline _apply_rule(::ECARule{101, N}, l::T, c::T, r::T) where {N, T} = xor(r, (~(l) | c))
 
 # Rule 102: xor(r, c)
-@inline function apply(::ECARule{102, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, c))
-end
+@inline needs_left(::ECARule{102})   = false
+@inline needs_center(::ECARule{102}) = true
+@inline needs_right(::ECARule{102})  = true
+
+@inline _apply_rule(::ECARule{102, N}, l::T, c::T, r::T) where {N, T} = xor(r, c)
 
 # Rule 103: (~((c | l)) | xor(r, c))
-@inline function apply(::ECARule{103, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) | xor(r, c)))
-end
+@inline needs_left(::ECARule{103})   = true
+@inline needs_center(::ECARule{103}) = true
+@inline needs_right(::ECARule{103})  = true
+
+@inline _apply_rule(::ECARule{103, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) | xor(r, c))
 
 # Rule 104: (xor(r, (c & l)) & (c | l))
-@inline function apply(::ECARule{104, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, (c & l)) & (c | l)))
-end
+@inline needs_left(::ECARule{104})   = true
+@inline needs_center(::ECARule{104}) = true
+@inline needs_right(::ECARule{104})  = true
+
+@inline _apply_rule(::ECARule{104, N}, l::T, c::T, r::T) where {N, T} = (xor(r, (c & l)) & (c | l))
 
 # Rule 105: xor(~(l), xor(r, c))
-@inline function apply(::ECARule{105, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), xor(r, c)))
-end
+@inline needs_left(::ECARule{105})   = true
+@inline needs_center(::ECARule{105}) = true
+@inline needs_right(::ECARule{105})  = true
+
+@inline _apply_rule(::ECARule{105, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), xor(r, c))
 
 # Rule 106: xor(r, (c & l))
-@inline function apply(::ECARule{106, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(r, (c & l)))
-end
+@inline needs_left(::ECARule{106})   = true
+@inline needs_center(::ECARule{106}) = true
+@inline needs_right(::ECARule{106})  = true
+
+@inline _apply_rule(::ECARule{106, N}, l::T, c::T, r::T) where {N, T} = xor(r, (c & l))
 
 # Rule 107: (~((c | l)) | xor(r, (c & l)))
-@inline function apply(::ECARule{107, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) | xor(r, (c & l))))
-end
+@inline needs_left(::ECARule{107})   = true
+@inline needs_center(::ECARule{107}) = true
+@inline needs_right(::ECARule{107})  = true
+
+@inline _apply_rule(::ECARule{107, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) | xor(r, (c & l)))
 
 # Rule 108: xor((r & l), c)
-@inline function apply(::ECARule{108, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r & l), c))
-end
+@inline needs_left(::ECARule{108})   = true
+@inline needs_center(::ECARule{108}) = true
+@inline needs_right(::ECARule{108})  = true
+
+@inline _apply_rule(::ECARule{108, N}, l::T, c::T, r::T) where {N, T} = xor((r & l), c)
 
 # Rule 109: xor((~(l) & (~(c) | r)), xor(r, c))
-@inline function apply(::ECARule{109, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (~(c) | r)), xor(r, c)))
-end
+@inline needs_left(::ECARule{109})   = true
+@inline needs_center(::ECARule{109}) = true
+@inline needs_right(::ECARule{109})  = true
+
+@inline _apply_rule(::ECARule{109, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (~(c) | r)), xor(r, c))
 
 # Rule 110: ((~(l) & c) | xor(r, c))
-@inline function apply(::ECARule{110, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & c) | xor(r, c)))
-end
+@inline needs_left(::ECARule{110})   = true
+@inline needs_center(::ECARule{110}) = true
+@inline needs_right(::ECARule{110})  = true
+
+@inline _apply_rule(::ECARule{110, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & c) | xor(r, c))
 
 # Rule 111: (~(l) | xor(r, c))
-@inline function apply(::ECARule{111, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | xor(r, c)))
-end
+@inline needs_left(::ECARule{111})   = true
+@inline needs_center(::ECARule{111}) = true
+@inline needs_right(::ECARule{111})  = true
+
+@inline _apply_rule(::ECARule{111, N}, l::T, c::T, r::T) where {N, T} = (~(l) | xor(r, c))
 
 # Rule 112: (~((r & c)) & l)
-@inline function apply(::ECARule{112, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r & c)) & l))
-end
+@inline needs_left(::ECARule{112})   = true
+@inline needs_center(::ECARule{112}) = true
+@inline needs_right(::ECARule{112})  = true
+
+@inline _apply_rule(::ECARule{112, N}, l::T, c::T, r::T) where {N, T} = (~((r & c)) & l)
 
 # Rule 113: xor((xor(c, l) | xor(~(c), r)), c)
-@inline function apply(::ECARule{113, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) | xor(~(c), r)), c))
-end
+@inline needs_left(::ECARule{113})   = true
+@inline needs_center(::ECARule{113}) = true
+@inline needs_right(::ECARule{113})  = true
+
+@inline _apply_rule(::ECARule{113, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) | xor(~(c), r)), c)
 
 # Rule 114: xor((xor(c, l) | r), c)
-@inline function apply(::ECARule{114, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) | r), c))
-end
+@inline needs_left(::ECARule{114})   = true
+@inline needs_center(::ECARule{114}) = true
+@inline needs_right(::ECARule{114})  = true
+
+@inline _apply_rule(::ECARule{114, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) | r), c)
 
 # Rule 115: (~(c) | (~(r) & l))
-@inline function apply(::ECARule{115, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) | (~(r) & l)))
-end
+@inline needs_left(::ECARule{115})   = true
+@inline needs_center(::ECARule{115}) = true
+@inline needs_right(::ECARule{115})  = true
+
+@inline _apply_rule(::ECARule{115, N}, l::T, c::T, r::T) where {N, T} = (~(c) | (~(r) & l))
 
 # Rule 116: xor((r & c), (c | l))
-@inline function apply(::ECARule{116, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r & c), (c | l)))
-end
+@inline needs_left(::ECARule{116})   = true
+@inline needs_center(::ECARule{116}) = true
+@inline needs_right(::ECARule{116})  = true
+
+@inline _apply_rule(::ECARule{116, N}, l::T, c::T, r::T) where {N, T} = xor((r & c), (c | l))
 
 # Rule 117: ((~(c) & l) | ~(r))
-@inline function apply(::ECARule{117, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & l) | ~(r)))
-end
+@inline needs_left(::ECARule{117})   = true
+@inline needs_center(::ECARule{117}) = true
+@inline needs_right(::ECARule{117})  = true
+
+@inline _apply_rule(::ECARule{117, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & l) | ~(r))
 
 # Rule 118: ((~(c) & l) | xor(r, c))
-@inline function apply(::ECARule{118, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & l) | xor(r, c)))
-end
+@inline needs_left(::ECARule{118})   = true
+@inline needs_center(::ECARule{118}) = true
+@inline needs_right(::ECARule{118})  = true
+
+@inline _apply_rule(::ECARule{118, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & l) | xor(r, c))
 
 # Rule 119: ~((r & c))
-@inline function apply(::ECARule{119, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((r & c)))
-end
+@inline needs_left(::ECARule{119})   = false
+@inline needs_center(::ECARule{119}) = true
+@inline needs_right(::ECARule{119})  = true
+
+@inline _apply_rule(::ECARule{119, N}, l::T, c::T, r::T) where {N, T} = ~((r & c))
 
 # Rule 120: xor((r & c), l)
-@inline function apply(::ECARule{120, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((r & c), l))
-end
+@inline needs_left(::ECARule{120})   = true
+@inline needs_center(::ECARule{120}) = true
+@inline needs_right(::ECARule{120})  = true
+
+@inline _apply_rule(::ECARule{120, N}, l::T, c::T, r::T) where {N, T} = xor((r & c), l)
 
 # Rule 121: (~((r | c)) | xor((r & c), l))
-@inline function apply(::ECARule{121, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | c)) | xor((r & c), l)))
-end
+@inline needs_left(::ECARule{121})   = true
+@inline needs_center(::ECARule{121}) = true
+@inline needs_right(::ECARule{121})  = true
+
+@inline _apply_rule(::ECARule{121, N}, l::T, c::T, r::T) where {N, T} = (~((r | c)) | xor((r & c), l))
 
 # Rule 122: ((~(c) & r) | xor(r, l))
-@inline function apply(::ECARule{122, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & r) | xor(r, l)))
-end
+@inline needs_left(::ECARule{122})   = true
+@inline needs_center(::ECARule{122}) = true
+@inline needs_right(::ECARule{122})  = true
+
+@inline _apply_rule(::ECARule{122, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & r) | xor(r, l))
 
 # Rule 123: (~(c) | xor(r, l))
-@inline function apply(::ECARule{123, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) | xor(r, l)))
-end
+@inline needs_left(::ECARule{123})   = true
+@inline needs_center(::ECARule{123}) = true
+@inline needs_right(::ECARule{123})  = true
+
+@inline _apply_rule(::ECARule{123, N}, l::T, c::T, r::T) where {N, T} = (~(c) | xor(r, l))
 
 # Rule 124: (xor(c, l) | (~(r) & c))
-@inline function apply(::ECARule{124, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | (~(r) & c)))
-end
+@inline needs_left(::ECARule{124})   = true
+@inline needs_center(::ECARule{124}) = true
+@inline needs_right(::ECARule{124})  = true
+
+@inline _apply_rule(::ECARule{124, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | (~(r) & c))
 
 # Rule 125: (xor(c, l) | ~(r))
-@inline function apply(::ECARule{125, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | ~(r)))
-end
+@inline needs_left(::ECARule{125})   = true
+@inline needs_center(::ECARule{125}) = true
+@inline needs_right(::ECARule{125})  = true
+
+@inline _apply_rule(::ECARule{125, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | ~(r))
 
 # Rule 126: (xor(c, l) | xor(r, c))
-@inline function apply(::ECARule{126, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | xor(r, c)))
-end
+@inline needs_left(::ECARule{126})   = true
+@inline needs_center(::ECARule{126}) = true
+@inline needs_right(::ECARule{126})  = true
+
+@inline _apply_rule(::ECARule{126, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | xor(r, c))
 
 # Rule 127: ~(((r & c) & l))
-@inline function apply(::ECARule{127, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~(((r & c) & l)))
-end
+@inline needs_left(::ECARule{127})   = true
+@inline needs_center(::ECARule{127}) = true
+@inline needs_right(::ECARule{127})  = true
+
+@inline _apply_rule(::ECARule{127, N}, l::T, c::T, r::T) where {N, T} = ~(((r & c) & l))
 
 # Rule 128: ((r & c) & l)
-@inline function apply(::ECARule{128, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((r & c) & l))
-end
+@inline needs_left(::ECARule{128})   = true
+@inline needs_center(::ECARule{128}) = true
+@inline needs_right(::ECARule{128})  = true
+
+@inline _apply_rule(::ECARule{128, N}, l::T, c::T, r::T) where {N, T} = ((r & c) & l)
 
 # Rule 129: ~((xor(c, l) | xor(r, c)))
-@inline function apply(::ECARule{129, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(c, l) | xor(r, c))))
-end
+@inline needs_left(::ECARule{129})   = true
+@inline needs_center(::ECARule{129}) = true
+@inline needs_right(::ECARule{129})  = true
+
+@inline _apply_rule(::ECARule{129, N}, l::T, c::T, r::T) where {N, T} = ~((xor(c, l) | xor(r, c)))
 
 # Rule 130: (r & xor(~(l), c))
-@inline function apply(::ECARule{130, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r & xor(~(l), c)))
-end
+@inline needs_left(::ECARule{130})   = true
+@inline needs_center(::ECARule{130}) = true
+@inline needs_right(::ECARule{130})  = true
+
+@inline _apply_rule(::ECARule{130, N}, l::T, c::T, r::T) where {N, T} = (r & xor(~(l), c))
 
 # Rule 131: xor(~(c), ((~(c) | r) & l))
-@inline function apply(::ECARule{131, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), ((~(c) | r) & l)))
-end
+@inline needs_left(::ECARule{131})   = true
+@inline needs_center(::ECARule{131}) = true
+@inline needs_right(::ECARule{131})  = true
+
+@inline _apply_rule(::ECARule{131, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), ((~(c) | r) & l))
 
 # Rule 132: xor((xor(r, l) & c), c)
-@inline function apply(::ECARule{132, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(r, l) & c), c))
-end
+@inline needs_left(::ECARule{132})   = true
+@inline needs_center(::ECARule{132}) = true
+@inline needs_right(::ECARule{132})  = true
+
+@inline _apply_rule(::ECARule{132, N}, l::T, c::T, r::T) where {N, T} = xor((xor(r, l) & c), c)
 
 # Rule 133: xor(~(l), (r & (~(l) | c)))
-@inline function apply(::ECARule{133, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (r & (~(l) | c))))
-end
+@inline needs_left(::ECARule{133})   = true
+@inline needs_center(::ECARule{133}) = true
+@inline needs_right(::ECARule{133})  = true
+
+@inline _apply_rule(::ECARule{133, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (r & (~(l) | c)))
 
 # Rule 134: xor((xor(c, l) & (r | c)), r)
-@inline function apply(::ECARule{134, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & (r | c)), r))
-end
+@inline needs_left(::ECARule{134})   = true
+@inline needs_center(::ECARule{134}) = true
+@inline needs_right(::ECARule{134})  = true
+
+@inline _apply_rule(::ECARule{134, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & (r | c)), r)
 
 # Rule 135: xor(~(l), (r & c))
-@inline function apply(::ECARule{135, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (r & c)))
-end
+@inline needs_left(::ECARule{135})   = true
+@inline needs_center(::ECARule{135}) = true
+@inline needs_right(::ECARule{135})  = true
+
+@inline _apply_rule(::ECARule{135, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (r & c))
 
 # Rule 136: (r & c)
-@inline function apply(::ECARule{136, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r & c))
-end
+@inline needs_left(::ECARule{136})   = false
+@inline needs_center(::ECARule{136}) = true
+@inline needs_right(::ECARule{136})  = true
+
+@inline _apply_rule(::ECARule{136, N}, l::T, c::T, r::T) where {N, T} = (r & c)
 
 # Rule 137: xor(~(c), ((~(c) & l) | r))
-@inline function apply(::ECARule{137, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), ((~(c) & l) | r)))
-end
+@inline needs_left(::ECARule{137})   = true
+@inline needs_center(::ECARule{137}) = true
+@inline needs_right(::ECARule{137})  = true
+
+@inline _apply_rule(::ECARule{137, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), ((~(c) & l) | r))
 
 # Rule 138: (r & (~(l) | c))
-@inline function apply(::ECARule{138, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r & (~(l) | c)))
-end
+@inline needs_left(::ECARule{138})   = true
+@inline needs_center(::ECARule{138}) = true
+@inline needs_right(::ECARule{138})  = true
+
+@inline _apply_rule(::ECARule{138, N}, l::T, c::T, r::T) where {N, T} = (r & (~(l) | c))
 
 # Rule 139: xor(~((c | l)), (r & c))
-@inline function apply(::ECARule{139, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((c | l)), (r & c)))
-end
+@inline needs_left(::ECARule{139})   = true
+@inline needs_center(::ECARule{139}) = true
+@inline needs_right(::ECARule{139})  = true
+
+@inline _apply_rule(::ECARule{139, N}, l::T, c::T, r::T) where {N, T} = xor(~((c | l)), (r & c))
 
 # Rule 140: ((~(l) | r) & c)
-@inline function apply(::ECARule{140, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) | r) & c))
-end
+@inline needs_left(::ECARule{140})   = true
+@inline needs_center(::ECARule{140}) = true
+@inline needs_right(::ECARule{140})  = true
+
+@inline _apply_rule(::ECARule{140, N}, l::T, c::T, r::T) where {N, T} = ((~(l) | r) & c)
 
 # Rule 141: xor(~(c), (xor(c, l) | r))
-@inline function apply(::ECARule{141, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (xor(c, l) | r)))
-end
+@inline needs_left(::ECARule{141})   = true
+@inline needs_center(::ECARule{141}) = true
+@inline needs_right(::ECARule{141})  = true
+
+@inline _apply_rule(::ECARule{141, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (xor(c, l) | r))
 
 # Rule 142: xor((xor(r, c) & xor(~(l), c)), c)
-@inline function apply(::ECARule{142, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(r, c) & xor(~(l), c)), c))
-end
+@inline needs_left(::ECARule{142})   = true
+@inline needs_center(::ECARule{142}) = true
+@inline needs_right(::ECARule{142})  = true
+
+@inline _apply_rule(::ECARule{142, N}, l::T, c::T, r::T) where {N, T} = xor((xor(r, c) & xor(~(l), c)), c)
 
 # Rule 143: (~(l) | (r & c))
-@inline function apply(::ECARule{143, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | (r & c)))
-end
+@inline needs_left(::ECARule{143})   = true
+@inline needs_center(::ECARule{143}) = true
+@inline needs_right(::ECARule{143})  = true
+
+@inline _apply_rule(::ECARule{143, N}, l::T, c::T, r::T) where {N, T} = (~(l) | (r & c))
 
 # Rule 144: (xor(~(c), r) & l)
-@inline function apply(::ECARule{144, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(~(c), r) & l))
-end
+@inline needs_left(::ECARule{144})   = true
+@inline needs_center(::ECARule{144}) = true
+@inline needs_right(::ECARule{144})  = true
+
+@inline _apply_rule(::ECARule{144, N}, l::T, c::T, r::T) where {N, T} = (xor(~(c), r) & l)
 
 # Rule 145: xor(~(c), (r & (~(c) | l)))
-@inline function apply(::ECARule{145, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (r & (~(c) | l))))
-end
+@inline needs_left(::ECARule{145})   = true
+@inline needs_center(::ECARule{145}) = true
+@inline needs_right(::ECARule{145})  = true
+
+@inline _apply_rule(::ECARule{145, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (r & (~(c) | l)))
 
 # Rule 146: xor((xor(c, l) & (~(c) | r)), r)
-@inline function apply(::ECARule{146, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & (~(c) | r)), r))
-end
+@inline needs_left(::ECARule{146})   = true
+@inline needs_center(::ECARule{146}) = true
+@inline needs_right(::ECARule{146})  = true
+
+@inline _apply_rule(::ECARule{146, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & (~(c) | r)), r)
 
 # Rule 147: xor(~(c), (r & l))
-@inline function apply(::ECARule{147, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (r & l)))
-end
+@inline needs_left(::ECARule{147})   = true
+@inline needs_center(::ECARule{147}) = true
+@inline needs_right(::ECARule{147})  = true
+
+@inline _apply_rule(::ECARule{147, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (r & l))
 
 # Rule 148: xor(xor(c, l), (r & (c | l)))
-@inline function apply(::ECARule{148, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(xor(c, l), (r & (c | l))))
-end
+@inline needs_left(::ECARule{148})   = true
+@inline needs_center(::ECARule{148}) = true
+@inline needs_right(::ECARule{148})  = true
+
+@inline _apply_rule(::ECARule{148, N}, l::T, c::T, r::T) where {N, T} = xor(xor(c, l), (r & (c | l)))
 
 # Rule 149: xor(~((c & l)), r)
-@inline function apply(::ECARule{149, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((c & l)), r))
-end
+@inline needs_left(::ECARule{149})   = true
+@inline needs_center(::ECARule{149}) = true
+@inline needs_right(::ECARule{149})  = true
+
+@inline _apply_rule(::ECARule{149, N}, l::T, c::T, r::T) where {N, T} = xor(~((c & l)), r)
 
 # Rule 150: xor(xor(c, l), r)
-@inline function apply(::ECARule{150, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(xor(c, l), r))
-end
+@inline needs_left(::ECARule{150})   = true
+@inline needs_center(::ECARule{150}) = true
+@inline needs_right(::ECARule{150})  = true
+
+@inline _apply_rule(::ECARule{150, N}, l::T, c::T, r::T) where {N, T} = xor(xor(c, l), r)
 
 # Rule 151: (~((c | l)) | xor(xor(c, l), r))
-@inline function apply(::ECARule{151, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) | xor(xor(c, l), r)))
-end
+@inline needs_left(::ECARule{151})   = true
+@inline needs_center(::ECARule{151}) = true
+@inline needs_right(::ECARule{151})  = true
+
+@inline _apply_rule(::ECARule{151, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) | xor(xor(c, l), r))
 
 # Rule 152: xor((~(r) & (c | l)), c)
-@inline function apply(::ECARule{152, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(r) & (c | l)), c))
-end
+@inline needs_left(::ECARule{152})   = true
+@inline needs_center(::ECARule{152}) = true
+@inline needs_right(::ECARule{152})  = true
+
+@inline _apply_rule(::ECARule{152, N}, l::T, c::T, r::T) where {N, T} = xor((~(r) & (c | l)), c)
 
 # Rule 153: xor(~(c), r)
-@inline function apply(::ECARule{153, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), r))
-end
+@inline needs_left(::ECARule{153})   = false
+@inline needs_center(::ECARule{153}) = true
+@inline needs_right(::ECARule{153})  = true
+
+@inline _apply_rule(::ECARule{153, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), r)
 
 # Rule 154: xor((~(c) & l), r)
-@inline function apply(::ECARule{154, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(c) & l), r))
-end
+@inline needs_left(::ECARule{154})   = true
+@inline needs_center(::ECARule{154}) = true
+@inline needs_right(::ECARule{154})  = true
+
+@inline _apply_rule(::ECARule{154, N}, l::T, c::T, r::T) where {N, T} = xor((~(c) & l), r)
 
 # Rule 155: xor(~(c), (r & (c | l)))
-@inline function apply(::ECARule{155, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(c), (r & (c | l))))
-end
+@inline needs_left(::ECARule{155})   = true
+@inline needs_center(::ECARule{155}) = true
+@inline needs_right(::ECARule{155})  = true
+
+@inline _apply_rule(::ECARule{155, N}, l::T, c::T, r::T) where {N, T} = xor(~(c), (r & (c | l)))
 
 # Rule 156: xor((~(r) & l), c)
-@inline function apply(::ECARule{156, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(r) & l), c))
-end
+@inline needs_left(::ECARule{156})   = true
+@inline needs_center(::ECARule{156}) = true
+@inline needs_right(::ECARule{156})  = true
+
+@inline _apply_rule(::ECARule{156, N}, l::T, c::T, r::T) where {N, T} = xor((~(r) & l), c)
 
 # Rule 157: ((~(l) & c) | xor(~(c), r))
-@inline function apply(::ECARule{157, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & c) | xor(~(c), r)))
-end
+@inline needs_left(::ECARule{157})   = true
+@inline needs_center(::ECARule{157}) = true
+@inline needs_right(::ECARule{157})  = true
+
+@inline _apply_rule(::ECARule{157, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & c) | xor(~(c), r))
 
 # Rule 158: (xor((r | c), l) | (r & c))
-@inline function apply(::ECARule{158, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor((r | c), l) | (r & c)))
-end
+@inline needs_left(::ECARule{158})   = true
+@inline needs_center(::ECARule{158}) = true
+@inline needs_right(::ECARule{158})  = true
+
+@inline _apply_rule(::ECARule{158, N}, l::T, c::T, r::T) where {N, T} = (xor((r | c), l) | (r & c))
 
 # Rule 159: ~((xor(r, c) & l))
-@inline function apply(::ECARule{159, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(r, c) & l)))
-end
+@inline needs_left(::ECARule{159})   = true
+@inline needs_center(::ECARule{159}) = true
+@inline needs_right(::ECARule{159})  = true
+
+@inline _apply_rule(::ECARule{159, N}, l::T, c::T, r::T) where {N, T} = ~((xor(r, c) & l))
 
 # Rule 160: (r & l)
-@inline function apply(::ECARule{160, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((r & l))
-end
+@inline needs_left(::ECARule{160})   = true
+@inline needs_center(::ECARule{160}) = false
+@inline needs_right(::ECARule{160})  = true
+
+@inline _apply_rule(::ECARule{160, N}, l::T, c::T, r::T) where {N, T} = (r & l)
 
 # Rule 161: xor((~(l) & (~(c) | r)), r)
-@inline function apply(::ECARule{161, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (~(c) | r)), r))
-end
+@inline needs_left(::ECARule{161})   = true
+@inline needs_center(::ECARule{161}) = true
+@inline needs_right(::ECARule{161})  = true
+
+@inline _apply_rule(::ECARule{161, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (~(c) | r)), r)
 
 # Rule 162: (r & (~(c) | l))
-@inline function apply(::ECARule{162, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r & (~(c) | l)))
-end
+@inline needs_left(::ECARule{162})   = true
+@inline needs_center(::ECARule{162}) = true
+@inline needs_right(::ECARule{162})  = true
+
+@inline _apply_rule(::ECARule{162, N}, l::T, c::T, r::T) where {N, T} = (r & (~(c) | l))
 
 # Rule 163: xor((~(l) | xor(r, c)), c)
-@inline function apply(::ECARule{163, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) | xor(r, c)), c))
-end
+@inline needs_left(::ECARule{163})   = true
+@inline needs_center(::ECARule{163}) = true
+@inline needs_right(::ECARule{163})  = true
+
+@inline _apply_rule(::ECARule{163, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) | xor(r, c)), c)
 
 # Rule 164: xor((~(l) & (r | c)), r)
-@inline function apply(::ECARule{164, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (r | c)), r))
-end
+@inline needs_left(::ECARule{164})   = true
+@inline needs_center(::ECARule{164}) = true
+@inline needs_right(::ECARule{164})  = true
+
+@inline _apply_rule(::ECARule{164, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (r | c)), r)
 
 # Rule 165: xor(~(l), r)
-@inline function apply(::ECARule{165, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), r))
-end
+@inline needs_left(::ECARule{165})   = true
+@inline needs_center(::ECARule{165}) = false
+@inline needs_right(::ECARule{165})  = true
+
+@inline _apply_rule(::ECARule{165, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), r)
 
 # Rule 166: xor((~(l) & c), r)
-@inline function apply(::ECARule{166, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & c), r))
-end
+@inline needs_left(::ECARule{166})   = true
+@inline needs_center(::ECARule{166}) = true
+@inline needs_right(::ECARule{166})  = true
+
+@inline _apply_rule(::ECARule{166, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & c), r)
 
 # Rule 167: xor(~(l), (r & (c | l)))
-@inline function apply(::ECARule{167, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (r & (c | l))))
-end
+@inline needs_left(::ECARule{167})   = true
+@inline needs_center(::ECARule{167}) = true
+@inline needs_right(::ECARule{167})  = true
+
+@inline _apply_rule(::ECARule{167, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (r & (c | l)))
 
 # Rule 168: (r & (c | l))
-@inline function apply(::ECARule{168, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r & (c | l)))
-end
+@inline needs_left(::ECARule{168})   = true
+@inline needs_center(::ECARule{168}) = true
+@inline needs_right(::ECARule{168})  = true
+
+@inline _apply_rule(::ECARule{168, N}, l::T, c::T, r::T) where {N, T} = (r & (c | l))
 
 # Rule 169: xor(~((c | l)), r)
-@inline function apply(::ECARule{169, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((c | l)), r))
-end
+@inline needs_left(::ECARule{169})   = true
+@inline needs_center(::ECARule{169}) = true
+@inline needs_right(::ECARule{169})  = true
+
+@inline _apply_rule(::ECARule{169, N}, l::T, c::T, r::T) where {N, T} = xor(~((c | l)), r)
 
 # Rule 170: r
-@inline function apply(::ECARule{170, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    r = shift_right(x, Val(N))
-    return m & (r)
-end
+@inline needs_left(::ECARule{170})   = false
+@inline needs_center(::ECARule{170}) = false
+@inline needs_right(::ECARule{170})  = true
+
+@inline _apply_rule(::ECARule{170, N}, l::T, c::T, r::T) where {N, T} = r
 
 # Rule 171: (~((c | l)) | r)
-@inline function apply(::ECARule{171, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c | l)) | r))
-end
+@inline needs_left(::ECARule{171})   = true
+@inline needs_center(::ECARule{171}) = true
+@inline needs_right(::ECARule{171})  = true
+
+@inline _apply_rule(::ECARule{171, N}, l::T, c::T, r::T) where {N, T} = (~((c | l)) | r)
 
 # Rule 172: xor((xor(r, c) & l), c)
-@inline function apply(::ECARule{172, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(r, c) & l), c))
-end
+@inline needs_left(::ECARule{172})   = true
+@inline needs_center(::ECARule{172}) = true
+@inline needs_right(::ECARule{172})  = true
+
+@inline _apply_rule(::ECARule{172, N}, l::T, c::T, r::T) where {N, T} = xor((xor(r, c) & l), c)
 
 # Rule 173: xor(~(((r & c) | l)), r)
-@inline function apply(::ECARule{173, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(((r & c) | l)), r))
-end
+@inline needs_left(::ECARule{173})   = true
+@inline needs_center(::ECARule{173}) = true
+@inline needs_right(::ECARule{173})  = true
+
+@inline _apply_rule(::ECARule{173, N}, l::T, c::T, r::T) where {N, T} = xor(~(((r & c) | l)), r)
 
 # Rule 174: ((~(l) & c) | r)
-@inline function apply(::ECARule{174, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & c) | r))
-end
+@inline needs_left(::ECARule{174})   = true
+@inline needs_center(::ECARule{174}) = true
+@inline needs_right(::ECARule{174})  = true
+
+@inline _apply_rule(::ECARule{174, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & c) | r)
 
 # Rule 175: (~(l) | r)
-@inline function apply(::ECARule{175, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | r))
-end
+@inline needs_left(::ECARule{175})   = true
+@inline needs_center(::ECARule{175}) = false
+@inline needs_right(::ECARule{175})  = true
+
+@inline _apply_rule(::ECARule{175, N}, l::T, c::T, r::T) where {N, T} = (~(l) | r)
 
 # Rule 176: ((~(c) | r) & l)
-@inline function apply(::ECARule{176, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) | r) & l))
-end
+@inline needs_left(::ECARule{176})   = true
+@inline needs_center(::ECARule{176}) = true
+@inline needs_right(::ECARule{176})  = true
+
+@inline _apply_rule(::ECARule{176, N}, l::T, c::T, r::T) where {N, T} = ((~(c) | r) & l)
 
 # Rule 177: xor((xor(c, l) | ~(r)), c)
-@inline function apply(::ECARule{177, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) | ~(r)), c))
-end
+@inline needs_left(::ECARule{177})   = true
+@inline needs_center(::ECARule{177}) = true
+@inline needs_right(::ECARule{177})  = true
+
+@inline _apply_rule(::ECARule{177, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) | ~(r)), c)
 
 # Rule 178: xor((xor(c, l) | xor(r, c)), c)
-@inline function apply(::ECARule{178, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) | xor(r, c)), c))
-end
+@inline needs_left(::ECARule{178})   = true
+@inline needs_center(::ECARule{178}) = true
+@inline needs_right(::ECARule{178})  = true
+
+@inline _apply_rule(::ECARule{178, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) | xor(r, c)), c)
 
 # Rule 179: (~(c) | (r & l))
-@inline function apply(::ECARule{179, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) | (r & l)))
-end
+@inline needs_left(::ECARule{179})   = true
+@inline needs_center(::ECARule{179}) = true
+@inline needs_right(::ECARule{179})  = true
+
+@inline _apply_rule(::ECARule{179, N}, l::T, c::T, r::T) where {N, T} = (~(c) | (r & l))
 
 # Rule 180: xor(xor(c, l), (r & c))
-@inline function apply(::ECARule{180, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(xor(c, l), (r & c)))
-end
+@inline needs_left(::ECARule{180})   = true
+@inline needs_center(::ECARule{180}) = true
+@inline needs_right(::ECARule{180})  = true
+
+@inline _apply_rule(::ECARule{180, N}, l::T, c::T, r::T) where {N, T} = xor(xor(c, l), (r & c))
 
 # Rule 181: xor(~(((r | c) & l)), r)
-@inline function apply(::ECARule{181, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(((r | c) & l)), r))
-end
+@inline needs_left(::ECARule{181})   = true
+@inline needs_center(::ECARule{181}) = true
+@inline needs_right(::ECARule{181})  = true
+
+@inline _apply_rule(::ECARule{181, N}, l::T, c::T, r::T) where {N, T} = xor(~(((r | c) & l)), r)
 
 # Rule 182: xor((xor(c, l) & (~(r) | c)), r)
-@inline function apply(::ECARule{182, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & (~(r) | c)), r))
-end
+@inline needs_left(::ECARule{182})   = true
+@inline needs_center(::ECARule{182}) = true
+@inline needs_right(::ECARule{182})  = true
+
+@inline _apply_rule(::ECARule{182, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & (~(r) | c)), r)
 
 # Rule 183: ~((xor(r, l) & c))
-@inline function apply(::ECARule{183, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(r, l) & c)))
-end
+@inline needs_left(::ECARule{183})   = true
+@inline needs_center(::ECARule{183}) = true
+@inline needs_right(::ECARule{183})  = true
+
+@inline _apply_rule(::ECARule{183, N}, l::T, c::T, r::T) where {N, T} = ~((xor(r, l) & c))
 
 # Rule 184: xor((~(c) & l), (r & c))
-@inline function apply(::ECARule{184, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(c) & l), (r & c)))
-end
+@inline needs_left(::ECARule{184})   = true
+@inline needs_center(::ECARule{184}) = true
+@inline needs_right(::ECARule{184})  = true
+
+@inline _apply_rule(::ECARule{184, N}, l::T, c::T, r::T) where {N, T} = xor((~(c) & l), (r & c))
 
 # Rule 185: ((~(c) & l) | xor(~(c), r))
-@inline function apply(::ECARule{185, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & l) | xor(~(c), r)))
-end
+@inline needs_left(::ECARule{185})   = true
+@inline needs_center(::ECARule{185}) = true
+@inline needs_right(::ECARule{185})  = true
+
+@inline _apply_rule(::ECARule{185, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & l) | xor(~(c), r))
 
 # Rule 186: ((~(c) & l) | r)
-@inline function apply(::ECARule{186, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & l) | r))
-end
+@inline needs_left(::ECARule{186})   = true
+@inline needs_center(::ECARule{186}) = true
+@inline needs_right(::ECARule{186})  = true
+
+@inline _apply_rule(::ECARule{186, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & l) | r)
 
 # Rule 187: (~(c) | r)
-@inline function apply(::ECARule{187, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) | r))
-end
+@inline needs_left(::ECARule{187})   = false
+@inline needs_center(::ECARule{187}) = true
+@inline needs_right(::ECARule{187})  = true
+
+@inline _apply_rule(::ECARule{187, N}, l::T, c::T, r::T) where {N, T} = (~(c) | r)
 
 # Rule 188: (xor(c, l) | (r & c))
-@inline function apply(::ECARule{188, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | (r & c)))
-end
+@inline needs_left(::ECARule{188})   = true
+@inline needs_center(::ECARule{188}) = true
+@inline needs_right(::ECARule{188})  = true
+
+@inline _apply_rule(::ECARule{188, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | (r & c))
 
 # Rule 189: (xor(c, l) | xor(~(c), r))
-@inline function apply(::ECARule{189, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | xor(~(c), r)))
-end
+@inline needs_left(::ECARule{189})   = true
+@inline needs_center(::ECARule{189}) = true
+@inline needs_right(::ECARule{189})  = true
+
+@inline _apply_rule(::ECARule{189, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | xor(~(c), r))
 
 # Rule 190: (xor(c, l) | r)
-@inline function apply(::ECARule{190, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(c, l) | r))
-end
+@inline needs_left(::ECARule{190})   = true
+@inline needs_center(::ECARule{190}) = true
+@inline needs_right(::ECARule{190})  = true
+
+@inline _apply_rule(::ECARule{190, N}, l::T, c::T, r::T) where {N, T} = (xor(c, l) | r)
 
 # Rule 191: (~((c & l)) | r)
-@inline function apply(::ECARule{191, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((c & l)) | r))
-end
+@inline needs_left(::ECARule{191})   = true
+@inline needs_center(::ECARule{191}) = true
+@inline needs_right(::ECARule{191})  = true
+
+@inline _apply_rule(::ECARule{191, N}, l::T, c::T, r::T) where {N, T} = (~((c & l)) | r)
 
 # Rule 192: (c & l)
-@inline function apply(::ECARule{192, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((c & l))
-end
+@inline needs_left(::ECARule{192})   = true
+@inline needs_center(::ECARule{192}) = true
+@inline needs_right(::ECARule{192})  = false
+
+@inline _apply_rule(::ECARule{192, N}, l::T, c::T, r::T) where {N, T} = (c & l)
 
 # Rule 193: xor((~(l) & (~(r) | c)), c)
-@inline function apply(::ECARule{193, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (~(r) | c)), c))
-end
+@inline needs_left(::ECARule{193})   = true
+@inline needs_center(::ECARule{193}) = true
+@inline needs_right(::ECARule{193})  = true
+
+@inline _apply_rule(::ECARule{193, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (~(r) | c)), c)
 
 # Rule 194: xor((~(l) & (r | c)), c)
-@inline function apply(::ECARule{194, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (r | c)), c))
-end
+@inline needs_left(::ECARule{194})   = true
+@inline needs_center(::ECARule{194}) = true
+@inline needs_right(::ECARule{194})  = true
+
+@inline _apply_rule(::ECARule{194, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (r | c)), c)
 
 # Rule 195: xor(~(l), c)
-@inline function apply(::ECARule{195, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & (xor(~(l), c))
-end
+@inline needs_left(::ECARule{195})   = true
+@inline needs_center(::ECARule{195}) = true
+@inline needs_right(::ECARule{195})  = false
+
+@inline _apply_rule(::ECARule{195, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), c)
 
 # Rule 196: (c & (~(r) | l))
-@inline function apply(::ECARule{196, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((c & (~(r) | l)))
-end
+@inline needs_left(::ECARule{196})   = true
+@inline needs_center(::ECARule{196}) = true
+@inline needs_right(::ECARule{196})  = true
+
+@inline _apply_rule(::ECARule{196, N}, l::T, c::T, r::T) where {N, T} = (c & (~(r) | l))
 
 # Rule 197: xor(~((xor(r, c) | l)), c)
-@inline function apply(::ECARule{197, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((xor(r, c) | l)), c))
-end
+@inline needs_left(::ECARule{197})   = true
+@inline needs_center(::ECARule{197}) = true
+@inline needs_right(::ECARule{197})  = true
+
+@inline _apply_rule(::ECARule{197, N}, l::T, c::T, r::T) where {N, T} = xor(~((xor(r, c) | l)), c)
 
 # Rule 198: xor((~(l) & r), c)
-@inline function apply(::ECARule{198, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & r), c))
-end
+@inline needs_left(::ECARule{198})   = true
+@inline needs_center(::ECARule{198}) = true
+@inline needs_right(::ECARule{198})  = true
+
+@inline _apply_rule(::ECARule{198, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & r), c)
 
 # Rule 199: xor((~(l) & (~(c) | r)), c)
-@inline function apply(::ECARule{199, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & (~(c) | r)), c))
-end
+@inline needs_left(::ECARule{199})   = true
+@inline needs_center(::ECARule{199}) = true
+@inline needs_right(::ECARule{199})  = true
+
+@inline _apply_rule(::ECARule{199, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & (~(c) | r)), c)
 
 # Rule 200: (c & (r | l))
-@inline function apply(::ECARule{200, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((c & (r | l)))
-end
+@inline needs_left(::ECARule{200})   = true
+@inline needs_center(::ECARule{200}) = true
+@inline needs_right(::ECARule{200})  = true
+
+@inline _apply_rule(::ECARule{200, N}, l::T, c::T, r::T) where {N, T} = (c & (r | l))
 
 # Rule 201: xor(~((r | l)), c)
-@inline function apply(::ECARule{201, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((r | l)), c))
-end
+@inline needs_left(::ECARule{201})   = true
+@inline needs_center(::ECARule{201}) = true
+@inline needs_right(::ECARule{201})  = true
+
+@inline _apply_rule(::ECARule{201, N}, l::T, c::T, r::T) where {N, T} = xor(~((r | l)), c)
 
 # Rule 202: xor((~(l) & xor(r, c)), c)
-@inline function apply(::ECARule{202, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & xor(r, c)), c))
-end
+@inline needs_left(::ECARule{202})   = true
+@inline needs_center(::ECARule{202}) = true
+@inline needs_right(::ECARule{202})  = true
+
+@inline _apply_rule(::ECARule{202, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & xor(r, c)), c)
 
 # Rule 203: xor(~(((r & c) | l)), c)
-@inline function apply(::ECARule{203, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(((r & c) | l)), c))
-end
+@inline needs_left(::ECARule{203})   = true
+@inline needs_center(::ECARule{203}) = true
+@inline needs_right(::ECARule{203})  = true
+
+@inline _apply_rule(::ECARule{203, N}, l::T, c::T, r::T) where {N, T} = xor(~(((r & c) | l)), c)
 
 # Rule 204: c
-@inline function apply(::ECARule{204, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    return m & (c)
-end
+@inline needs_left(::ECARule{204})   = false
+@inline needs_center(::ECARule{204}) = true
+@inline needs_right(::ECARule{204})  = false
+
+@inline _apply_rule(::ECARule{204, N}, l::T, c::T, r::T) where {N, T} = c
 
 # Rule 205: (~((r | l)) | c)
-@inline function apply(::ECARule{205, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | l)) | c))
-end
+@inline needs_left(::ECARule{205})   = true
+@inline needs_center(::ECARule{205}) = true
+@inline needs_right(::ECARule{205})  = true
+
+@inline _apply_rule(::ECARule{205, N}, l::T, c::T, r::T) where {N, T} = (~((r | l)) | c)
 
 # Rule 206: ((~(l) & r) | c)
-@inline function apply(::ECARule{206, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(l) & r) | c))
-end
+@inline needs_left(::ECARule{206})   = true
+@inline needs_center(::ECARule{206}) = true
+@inline needs_right(::ECARule{206})  = true
+
+@inline _apply_rule(::ECARule{206, N}, l::T, c::T, r::T) where {N, T} = ((~(l) & r) | c)
 
 # Rule 207: (~(l) | c)
-@inline function apply(::ECARule{207, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((~(l) | c))
-end
+@inline needs_left(::ECARule{207})   = true
+@inline needs_center(::ECARule{207}) = true
+@inline needs_right(::ECARule{207})  = false
+
+@inline _apply_rule(::ECARule{207, N}, l::T, c::T, r::T) where {N, T} = (~(l) | c)
 
 # Rule 208: ((~(r) | c) & l)
-@inline function apply(::ECARule{208, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(r) | c) & l))
-end
+@inline needs_left(::ECARule{208})   = true
+@inline needs_center(::ECARule{208}) = true
+@inline needs_right(::ECARule{208})  = true
+
+@inline _apply_rule(::ECARule{208, N}, l::T, c::T, r::T) where {N, T} = ((~(r) | c) & l)
 
 # Rule 209: xor(~((r | c)), (c & l))
-@inline function apply(::ECARule{209, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((r | c)), (c & l)))
-end
+@inline needs_left(::ECARule{209})   = true
+@inline needs_center(::ECARule{209}) = true
+@inline needs_right(::ECARule{209})  = true
+
+@inline _apply_rule(::ECARule{209, N}, l::T, c::T, r::T) where {N, T} = xor(~((r | c)), (c & l))
 
 # Rule 210: xor(xor((r | c), l), c)
-@inline function apply(::ECARule{210, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(xor((r | c), l), c))
-end
+@inline needs_left(::ECARule{210})   = true
+@inline needs_center(::ECARule{210}) = true
+@inline needs_right(::ECARule{210})  = true
+
+@inline _apply_rule(::ECARule{210, N}, l::T, c::T, r::T) where {N, T} = xor(xor((r | c), l), c)
 
 # Rule 211: xor(~(((r | c) & l)), c)
-@inline function apply(::ECARule{211, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(((r | c) & l)), c))
-end
+@inline needs_left(::ECARule{211})   = true
+@inline needs_center(::ECARule{211}) = true
+@inline needs_right(::ECARule{211})  = true
+
+@inline _apply_rule(::ECARule{211, N}, l::T, c::T, r::T) where {N, T} = xor(~(((r | c) & l)), c)
 
 # Rule 212: xor((xor(c, l) & xor(~(c), r)), c)
-@inline function apply(::ECARule{212, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & xor(~(c), r)), c))
-end
+@inline needs_left(::ECARule{212})   = true
+@inline needs_center(::ECARule{212}) = true
+@inline needs_right(::ECARule{212})  = true
+
+@inline _apply_rule(::ECARule{212, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & xor(~(c), r)), c)
 
 # Rule 213: (~(r) | (c & l))
-@inline function apply(::ECARule{213, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) | (c & l)))
-end
+@inline needs_left(::ECARule{213})   = true
+@inline needs_center(::ECARule{213}) = true
+@inline needs_right(::ECARule{213})  = true
+
+@inline _apply_rule(::ECARule{213, N}, l::T, c::T, r::T) where {N, T} = (~(r) | (c & l))
 
 # Rule 214: xor(xor((r | (c & l)), l), c)
-@inline function apply(::ECARule{214, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(xor((r | (c & l)), l), c))
-end
+@inline needs_left(::ECARule{214})   = true
+@inline needs_center(::ECARule{214}) = true
+@inline needs_right(::ECARule{214})  = true
+
+@inline _apply_rule(::ECARule{214, N}, l::T, c::T, r::T) where {N, T} = xor(xor((r | (c & l)), l), c)
 
 # Rule 215: ~((xor(c, l) & r))
-@inline function apply(::ECARule{215, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(c, l) & r)))
-end
+@inline needs_left(::ECARule{215})   = true
+@inline needs_center(::ECARule{215}) = true
+@inline needs_right(::ECARule{215})  = true
+
+@inline _apply_rule(::ECARule{215, N}, l::T, c::T, r::T) where {N, T} = ~((xor(c, l) & r))
 
 # Rule 216: xor((xor(c, l) & ~(r)), c)
-@inline function apply(::ECARule{216, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & ~(r)), c))
-end
+@inline needs_left(::ECARule{216})   = true
+@inline needs_center(::ECARule{216}) = true
+@inline needs_right(::ECARule{216})  = true
+
+@inline _apply_rule(::ECARule{216, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & ~(r)), c)
 
 # Rule 217: xor(~((r | (c & l))), c)
-@inline function apply(::ECARule{217, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((r | (c & l))), c))
-end
+@inline needs_left(::ECARule{217})   = true
+@inline needs_center(::ECARule{217}) = true
+@inline needs_right(::ECARule{217})  = true
+
+@inline _apply_rule(::ECARule{217, N}, l::T, c::T, r::T) where {N, T} = xor(~((r | (c & l))), c)
 
 # Rule 218: (xor(r, l) | (r & c))
-@inline function apply(::ECARule{218, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, l) | (r & c)))
-end
+@inline needs_left(::ECARule{218})   = true
+@inline needs_center(::ECARule{218}) = true
+@inline needs_right(::ECARule{218})  = true
+
+@inline _apply_rule(::ECARule{218, N}, l::T, c::T, r::T) where {N, T} = (xor(r, l) | (r & c))
 
 # Rule 219: ~((xor(c, l) & xor(r, c)))
-@inline function apply(::ECARule{219, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(c, l) & xor(r, c))))
-end
+@inline needs_left(::ECARule{219})   = true
+@inline needs_center(::ECARule{219}) = true
+@inline needs_right(::ECARule{219})  = true
+
+@inline _apply_rule(::ECARule{219, N}, l::T, c::T, r::T) where {N, T} = ~((xor(c, l) & xor(r, c)))
 
 # Rule 220: ((~(r) & l) | c)
-@inline function apply(::ECARule{220, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(r) & l) | c))
-end
+@inline needs_left(::ECARule{220})   = true
+@inline needs_center(::ECARule{220}) = true
+@inline needs_right(::ECARule{220})  = true
+
+@inline _apply_rule(::ECARule{220, N}, l::T, c::T, r::T) where {N, T} = ((~(r) & l) | c)
 
 # Rule 221: (~(r) | c)
-@inline function apply(::ECARule{221, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) | c))
-end
+@inline needs_left(::ECARule{221})   = false
+@inline needs_center(::ECARule{221}) = true
+@inline needs_right(::ECARule{221})  = true
+
+@inline _apply_rule(::ECARule{221, N}, l::T, c::T, r::T) where {N, T} = (~(r) | c)
 
 # Rule 222: (xor(r, l) | c)
-@inline function apply(::ECARule{222, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, l) | c))
-end
+@inline needs_left(::ECARule{222})   = true
+@inline needs_center(::ECARule{222}) = true
+@inline needs_right(::ECARule{222})  = true
+
+@inline _apply_rule(::ECARule{222, N}, l::T, c::T, r::T) where {N, T} = (xor(r, l) | c)
 
 # Rule 223: (~((r & l)) | c)
-@inline function apply(::ECARule{223, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r & l)) | c))
-end
+@inline needs_left(::ECARule{223})   = true
+@inline needs_center(::ECARule{223}) = true
+@inline needs_right(::ECARule{223})  = true
+
+@inline _apply_rule(::ECARule{223, N}, l::T, c::T, r::T) where {N, T} = (~((r & l)) | c)
 
 # Rule 224: ((r | c) & l)
-@inline function apply(::ECARule{224, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((r | c) & l))
-end
+@inline needs_left(::ECARule{224})   = true
+@inline needs_center(::ECARule{224}) = true
+@inline needs_right(::ECARule{224})  = true
+
+@inline _apply_rule(::ECARule{224, N}, l::T, c::T, r::T) where {N, T} = ((r | c) & l)
 
 # Rule 225: xor(~(l), (r | c))
-@inline function apply(::ECARule{225, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (r | c)))
-end
+@inline needs_left(::ECARule{225})   = true
+@inline needs_center(::ECARule{225}) = true
+@inline needs_right(::ECARule{225})  = true
+
+@inline _apply_rule(::ECARule{225, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (r | c))
 
 # Rule 226: xor((~(l) & c), (r | c))
-@inline function apply(::ECARule{226, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((~(l) & c), (r | c)))
-end
+@inline needs_left(::ECARule{226})   = true
+@inline needs_center(::ECARule{226}) = true
+@inline needs_right(::ECARule{226})  = true
+
+@inline _apply_rule(::ECARule{226, N}, l::T, c::T, r::T) where {N, T} = xor((~(l) & c), (r | c))
 
 # Rule 227: ~((xor(c, l) & (~(r) | c)))
-@inline function apply(::ECARule{227, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (~((xor(c, l) & (~(r) | c))))
-end
+@inline needs_left(::ECARule{227})   = true
+@inline needs_center(::ECARule{227}) = true
+@inline needs_right(::ECARule{227})  = true
+
+@inline _apply_rule(::ECARule{227, N}, l::T, c::T, r::T) where {N, T} = ~((xor(c, l) & (~(r) | c)))
 
 # Rule 228: xor((xor(c, l) & r), c)
-@inline function apply(::ECARule{228, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & r), c))
-end
+@inline needs_left(::ECARule{228})   = true
+@inline needs_center(::ECARule{228}) = true
+@inline needs_right(::ECARule{228})  = true
+
+@inline _apply_rule(::ECARule{228, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & r), c)
 
 # Rule 229: xor(~(l), (r | (c & l)))
-@inline function apply(::ECARule{229, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~(l), (r | (c & l))))
-end
+@inline needs_left(::ECARule{229})   = true
+@inline needs_center(::ECARule{229}) = true
+@inline needs_right(::ECARule{229})  = true
+
+@inline _apply_rule(::ECARule{229, N}, l::T, c::T, r::T) where {N, T} = xor(~(l), (r | (c & l)))
 
 # Rule 230: (xor(r, c) | (c & l))
-@inline function apply(::ECARule{230, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) | (c & l)))
-end
+@inline needs_left(::ECARule{230})   = true
+@inline needs_center(::ECARule{230}) = true
+@inline needs_right(::ECARule{230})  = true
+
+@inline _apply_rule(::ECARule{230, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) | (c & l))
 
 # Rule 231: (xor(r, c) | xor(~(l), c))
-@inline function apply(::ECARule{231, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) | xor(~(l), c)))
-end
+@inline needs_left(::ECARule{231})   = true
+@inline needs_center(::ECARule{231}) = true
+@inline needs_right(::ECARule{231})  = true
+
+@inline _apply_rule(::ECARule{231, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) | xor(~(l), c))
 
 # Rule 232: xor((xor(c, l) & xor(r, c)), c)
-@inline function apply(::ECARule{232, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor((xor(c, l) & xor(r, c)), c))
-end
+@inline needs_left(::ECARule{232})   = true
+@inline needs_center(::ECARule{232}) = true
+@inline needs_right(::ECARule{232})  = true
+
+@inline _apply_rule(::ECARule{232, N}, l::T, c::T, r::T) where {N, T} = xor((xor(c, l) & xor(r, c)), c)
 
 # Rule 233: xor(~((c | l)), (r | (c & l)))
-@inline function apply(::ECARule{233, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (xor(~((c | l)), (r | (c & l))))
-end
+@inline needs_left(::ECARule{233})   = true
+@inline needs_center(::ECARule{233}) = true
+@inline needs_right(::ECARule{233})  = true
+
+@inline _apply_rule(::ECARule{233, N}, l::T, c::T, r::T) where {N, T} = xor(~((c | l)), (r | (c & l)))
 
 # Rule 234: (r | (c & l))
-@inline function apply(::ECARule{234, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r | (c & l)))
-end
+@inline needs_left(::ECARule{234})   = true
+@inline needs_center(::ECARule{234}) = true
+@inline needs_right(::ECARule{234})  = true
+
+@inline _apply_rule(::ECARule{234, N}, l::T, c::T, r::T) where {N, T} = (r | (c & l))
 
 # Rule 235: (r | xor(~(l), c))
-@inline function apply(::ECARule{235, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r | xor(~(l), c)))
-end
+@inline needs_left(::ECARule{235})   = true
+@inline needs_center(::ECARule{235}) = true
+@inline needs_right(::ECARule{235})  = true
+
+@inline _apply_rule(::ECARule{235, N}, l::T, c::T, r::T) where {N, T} = (r | xor(~(l), c))
 
 # Rule 236: ((r & l) | c)
-@inline function apply(::ECARule{236, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((r & l) | c))
-end
+@inline needs_left(::ECARule{236})   = true
+@inline needs_center(::ECARule{236}) = true
+@inline needs_right(::ECARule{236})  = true
+
+@inline _apply_rule(::ECARule{236, N}, l::T, c::T, r::T) where {N, T} = ((r & l) | c)
 
 # Rule 237: (xor(~(l), r) | c)
-@inline function apply(::ECARule{237, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(~(l), r) | c))
-end
+@inline needs_left(::ECARule{237})   = true
+@inline needs_center(::ECARule{237}) = true
+@inline needs_right(::ECARule{237})  = true
+
+@inline _apply_rule(::ECARule{237, N}, l::T, c::T, r::T) where {N, T} = (xor(~(l), r) | c)
 
 # Rule 238: (r | c)
-@inline function apply(::ECARule{238, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r | c))
-end
+@inline needs_left(::ECARule{238})   = false
+@inline needs_center(::ECARule{238}) = true
+@inline needs_right(::ECARule{238})  = true
+
+@inline _apply_rule(::ECARule{238, N}, l::T, c::T, r::T) where {N, T} = (r | c)
 
 # Rule 239: (~(l) | (r | c))
-@inline function apply(::ECARule{239, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(l) | (r | c)))
-end
+@inline needs_left(::ECARule{239})   = true
+@inline needs_center(::ECARule{239}) = true
+@inline needs_right(::ECARule{239})  = true
+
+@inline _apply_rule(::ECARule{239, N}, l::T, c::T, r::T) where {N, T} = (~(l) | (r | c))
 
 # Rule 240: l
-@inline function apply(::ECARule{240, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    return m & (l)
-end
+@inline needs_left(::ECARule{240})   = true
+@inline needs_center(::ECARule{240}) = false
+@inline needs_right(::ECARule{240})  = false
+
+@inline _apply_rule(::ECARule{240, N}, l::T, c::T, r::T) where {N, T} = l
 
 # Rule 241: (~((r | c)) | l)
-@inline function apply(::ECARule{241, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r | c)) | l))
-end
+@inline needs_left(::ECARule{241})   = true
+@inline needs_center(::ECARule{241}) = true
+@inline needs_right(::ECARule{241})  = true
+
+@inline _apply_rule(::ECARule{241, N}, l::T, c::T, r::T) where {N, T} = (~((r | c)) | l)
 
 # Rule 242: ((~(c) & r) | l)
-@inline function apply(::ECARule{242, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(c) & r) | l))
-end
+@inline needs_left(::ECARule{242})   = true
+@inline needs_center(::ECARule{242}) = true
+@inline needs_right(::ECARule{242})  = true
+
+@inline _apply_rule(::ECARule{242, N}, l::T, c::T, r::T) where {N, T} = ((~(c) & r) | l)
 
 # Rule 243: (~(c) | l)
-@inline function apply(::ECARule{243, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((~(c) | l))
-end
+@inline needs_left(::ECARule{243})   = true
+@inline needs_center(::ECARule{243}) = true
+@inline needs_right(::ECARule{243})  = false
+
+@inline _apply_rule(::ECARule{243, N}, l::T, c::T, r::T) where {N, T} = (~(c) | l)
 
 # Rule 244: ((~(r) & c) | l)
-@inline function apply(::ECARule{244, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((~(r) & c) | l))
-end
+@inline needs_left(::ECARule{244})   = true
+@inline needs_center(::ECARule{244}) = true
+@inline needs_right(::ECARule{244})  = true
+
+@inline _apply_rule(::ECARule{244, N}, l::T, c::T, r::T) where {N, T} = ((~(r) & c) | l)
 
 # Rule 245: (~(r) | l)
-@inline function apply(::ECARule{245, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((~(r) | l))
-end
+@inline needs_left(::ECARule{245})   = true
+@inline needs_center(::ECARule{245}) = false
+@inline needs_right(::ECARule{245})  = true
+
+@inline _apply_rule(::ECARule{245, N}, l::T, c::T, r::T) where {N, T} = (~(r) | l)
 
 # Rule 246: (xor(r, c) | l)
-@inline function apply(::ECARule{246, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(r, c) | l))
-end
+@inline needs_left(::ECARule{246})   = true
+@inline needs_center(::ECARule{246}) = true
+@inline needs_right(::ECARule{246})  = true
+
+@inline _apply_rule(::ECARule{246, N}, l::T, c::T, r::T) where {N, T} = (xor(r, c) | l)
 
 # Rule 247: (~((r & c)) | l)
-@inline function apply(::ECARule{247, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~((r & c)) | l))
-end
+@inline needs_left(::ECARule{247})   = true
+@inline needs_center(::ECARule{247}) = true
+@inline needs_right(::ECARule{247})  = true
+
+@inline _apply_rule(::ECARule{247, N}, l::T, c::T, r::T) where {N, T} = (~((r & c)) | l)
 
 # Rule 248: ((r & c) | l)
-@inline function apply(::ECARule{248, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & (((r & c) | l))
-end
+@inline needs_left(::ECARule{248})   = true
+@inline needs_center(::ECARule{248}) = true
+@inline needs_right(::ECARule{248})  = true
+
+@inline _apply_rule(::ECARule{248, N}, l::T, c::T, r::T) where {N, T} = ((r & c) | l)
 
 # Rule 249: (xor(~(c), r) | l)
-@inline function apply(::ECARule{249, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((xor(~(c), r) | l))
-end
+@inline needs_left(::ECARule{249})   = true
+@inline needs_center(::ECARule{249}) = true
+@inline needs_right(::ECARule{249})  = true
+
+@inline _apply_rule(::ECARule{249, N}, l::T, c::T, r::T) where {N, T} = (xor(~(c), r) | l)
 
 # Rule 250: (r | l)
-@inline function apply(::ECARule{250, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    r = shift_right(x, Val(N))
-    return m & ((r | l))
-end
+@inline needs_left(::ECARule{250})   = true
+@inline needs_center(::ECARule{250}) = false
+@inline needs_right(::ECARule{250})  = true
+
+@inline _apply_rule(::ECARule{250, N}, l::T, c::T, r::T) where {N, T} = (r | l)
 
 # Rule 251: (~(c) | (r | l))
-@inline function apply(::ECARule{251, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(c) | (r | l)))
-end
+@inline needs_left(::ECARule{251})   = true
+@inline needs_center(::ECARule{251}) = true
+@inline needs_right(::ECARule{251})  = true
+
+@inline _apply_rule(::ECARule{251, N}, l::T, c::T, r::T) where {N, T} = (~(c) | (r | l))
 
 # Rule 252: (c | l)
-@inline function apply(::ECARule{252, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    return m & ((c | l))
-end
+@inline needs_left(::ECARule{252})   = true
+@inline needs_center(::ECARule{252}) = true
+@inline needs_right(::ECARule{252})  = false
+
+@inline _apply_rule(::ECARule{252, N}, l::T, c::T, r::T) where {N, T} = (c | l)
 
 # Rule 253: (~(r) | (c | l))
-@inline function apply(::ECARule{253, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((~(r) | (c | l)))
-end
+@inline needs_left(::ECARule{253})   = true
+@inline needs_center(::ECARule{253}) = true
+@inline needs_right(::ECARule{253})  = true
+
+@inline _apply_rule(::ECARule{253, N}, l::T, c::T, r::T) where {N, T} = (~(r) | (c | l))
 
 # Rule 254: (r | (c | l))
-@inline function apply(::ECARule{254, N}, x::T) where {N, T}
-    m = ~(~zero(T) << N)
-    l = shift_left(x, Val(N))
-    c = x
-    r = shift_right(x, Val(N))
-    return m & ((r | (c | l)))
-end
+@inline needs_left(::ECARule{254})   = true
+@inline needs_center(::ECARule{254}) = true
+@inline needs_right(::ECARule{254})  = true
+
+@inline _apply_rule(::ECARule{254, N}, l::T, c::T, r::T) where {N, T} = (r | (c | l))
 
 # Rule 255: m
-@inline function apply(::ECARule{255, N}, x::T) where {N, T}
+@inline needs_left(::ECARule{255})   = false
+@inline needs_center(::ECARule{255}) = false
+@inline needs_right(::ECARule{255})  = false
+
+@inline function _apply_rule(::ECARule{255, N}, l::T, c::T, r::T) where {N, T}
     m = ~(~zero(T) << N)
-    return m & (m)
+    return m
 end
 
