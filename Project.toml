@@ -3,6 +3,9 @@ uuid = "646c8f5f-b0b0-483f-b45f-3a7a8b558f78"
 authors = ["Jamie Mair <JamieMair@users.noreply.github.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+
+
 [compat]
 julia = "1.6"
 
